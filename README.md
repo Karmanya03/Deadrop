@@ -129,6 +129,32 @@ cargo build --release
 # Binary at: target/release/ded
 ```
 
+### 🔄 One-line update (Linux/macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.sh | bash
+```
+
+> Same as install — it overwrites the old binary with the latest release. Your PATH stays intact.
+
+### 🗑 One-line uninstall (Linux/macOS)
+
+```bash
+rm -f ~/.local/bin/ded && echo "deadrop removed ☠"
+```
+
+> If you installed to `/usr/local/bin/` instead:
+
+```bash
+sudo rm -f /usr/local/bin/ded && echo "deadrop removed ☠"
+```
+
+### 🗑 Uninstall (cargo)
+
+```bash
+cargo uninstall deadrop
+```
+
 ## Usage
 
 ### The basics
