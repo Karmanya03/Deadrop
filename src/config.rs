@@ -76,3 +76,23 @@ fn parse_duration(s: &str) -> Result<chrono::Duration> {
         .map_err(|_| anyhow!("Invalid duration '{}'. Use format: 30s, 10m, 1h, 7d", s))?;
     Ok(chrono::Duration::minutes(n))
 }
+pub struct ReceiveConfig {
+    pub output_dir: std::path::PathBuf,
+    pub port: u16,
+    pub expiry_duration: chrono::Duration,
+    pub bind: String,
+    pub no_qr: bool,
+}
+
+impl ReceiveConfig {
+    pub fn new(
+        output: std::path::PathBuf,
+        port: u16,
+        expire: String,
+        bind: String,
+        no_qr: bool,
+    ) -> anyhow::Result<Self> {
+        let expiry_duration = parse_duration(&expire)?;
+        Ok(Self { output_dir: output, port, expiry_duration, bind, no_qr })
+    }
+}

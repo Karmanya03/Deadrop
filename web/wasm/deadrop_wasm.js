@@ -1,5 +1,3 @@
-/* @ts-self-types="./deadrop_wasm.d.ts" */
-
 /**
  * Full in-memory decryption (for small files or when streaming isn't available)
  * @param {Uint8Array} encrypted_data
@@ -46,6 +44,52 @@ export function decrypt_chunk(encrypted_chunk, key_base64, nonce_bytes, chunk_in
 }
 
 /**
+ * Encrypt an entire blob in-memory. Returns [header][chunk_len][chunk]...
+ * Key is base64url-encoded (same format as URL fragment).
+ * Called from upload-worker.js when phone sends file to PC.
+ * @param {Uint8Array} plaintext
+ * @param {string} key_base64
+ * @returns {Uint8Array}
+ */
+export function encrypt_blob(plaintext, key_base64) {
+    const ptr0 = passArray8ToWasm0(plaintext, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(key_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.encrypt_blob(ptr0, len0, ptr1, len1);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
+ * Encrypt a single chunk — for streaming upload (future use)
+ * @param {Uint8Array} chunk_data
+ * @param {string} key_base64
+ * @param {Uint8Array} nonce_bytes
+ * @param {bigint} chunk_index
+ * @returns {Uint8Array}
+ */
+export function encrypt_chunk(chunk_data, key_base64, nonce_bytes, chunk_index) {
+    const ptr0 = passArray8ToWasm0(chunk_data, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(key_base64, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(nonce_bytes, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ret = wasm.encrypt_chunk(ptr0, len0, ptr1, len1, ptr2, len2, chunk_index);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v4;
+}
+
+/**
  * Parse the 40-byte header from the encrypted blob
  * Returns [nonce(24), total_chunks(8), original_size(8)] as a flat Uint8Array
  * @param {Uint8Array} data
@@ -69,6 +113,9 @@ function __wbg_get_imports() {
         __wbg___wbindgen_throw_be289d5034ed271b: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
+        __wbg_getRandomValues_2a91986308c74a93: function() { return handleError(function (arg0, arg1) {
+            globalThis.crypto.getRandomValues(getArrayU8FromWasm0(arg0, arg1));
+        }, arguments); },
         __wbindgen_cast_0000000000000001: function(arg0, arg1) {
             // Cast intrinsic for `Ref(String) -> Externref`.
             const ret = getStringFromWasm0(arg0, arg1);
@@ -90,6 +137,12 @@ function __wbg_get_imports() {
     };
 }
 
+function addToExternrefTable0(obj) {
+    const idx = wasm.__externref_table_alloc();
+    wasm.__wbindgen_externrefs.set(idx, obj);
+    return idx;
+}
+
 function getArrayU8FromWasm0(ptr, len) {
     ptr = ptr >>> 0;
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
@@ -106,6 +159,15 @@ function getUint8ArrayMemory0() {
         cachedUint8ArrayMemory0 = new Uint8Array(wasm.memory.buffer);
     }
     return cachedUint8ArrayMemory0;
+}
+
+function handleError(f, args) {
+    try {
+        return f.apply(this, args);
+    } catch (e) {
+        const idx = addToExternrefTable0(e);
+        wasm.__wbindgen_exn_store(idx);
+    }
 }
 
 function passArray8ToWasm0(arg, malloc) {

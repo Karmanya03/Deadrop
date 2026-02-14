@@ -32,22 +32,45 @@ Remember in spy movies when someone leaves a briefcase under a park bench, and s
 This is that, but for files. And the briefcase is encrypted with military-grade cryptography. And the park bench self-destructs after pickup. And nobody — not even the bench — knows what's inside.
 
 ```
-You                              Your friend
- │                                    │
- │  ded ./secret-plans.pdf            │
- │  ─────────────────────►            │
- │  here's a link + QR code          │
- │                                    │
- │          (sends link via Signal)   │
- │                                    │
- │                    opens link in browser
- │                    browser decrypts locally
- │                    downloads the file
- │                                    │
- │  💥 file self-destructs            │
- │  🛑 server shuts down              │
- │                                    │
- │  what file? there was no file.     │
+    ┌─────────┐                                          ┌─────────┐
+    │   You   │                                          │  Friend │
+    └────┬────┘                                          └────┬────┘
+         │                                                    │
+         │  ded ./secret-plans.pdf                            │
+         │  ━━━━━━━━━━━━━━━━━━━━━━━                           │
+         │                                                    │
+    ┌────┴────────────────────────────────────────────────────┐│
+    │                  🔒 Your Machine                        ││
+    │  ┌──────────┐    ┌──────────────┐    ┌──────────────┐  ││
+    │  │ Encrypt  │───►│  Ciphertext  │───►│ HTTPS Server │  ││
+    │  │ (WASM)   │    │  (on disk)   │    │ (Axum+TLS)   │  ││
+    │  └──────────┘    └──────────────┘    └──────┬───────┘  ││
+    │       🔑 Key goes in URL #fragment          │          ││
+    └─────────────────────────────────────────────┼──────────┘│
+         │                                        │           │
+         │  📲 Sends link via Signal / QR scan    │           │
+         │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─►│           │
+         │                                        │           │
+         │                                  ┌─────┴───────┐   │
+         │                                  │  Opens URL   │◄──┘
+         │                                  │  in browser  │
+         │                                  └─────┬───────┘
+         │                                        │
+         │                          ┌─────────────┴─────────────┐
+         │                          │  📦 Browser fetches blob  │
+         │                          │  🔑 Extracts #key         │
+         │                          │  ⚡ WASM decrypts locally  │
+         │                          │  💾 File downloads         │
+         │                          └─────────────┬─────────────┘
+         │                                        │
+    ┌────┴──────────────────────────────┐         │
+    │  💥 Self-destruct triggered       │         │
+    │  🔥 Drop marked as burned         │         │
+    │  🛑 Server shuts down             │         │
+    └───────────────────────────────────┘         │
+         │                                        │
+         ▼                                        ▼
+    What file? There was no file.           Got it. Thanks. 👍
 ```
 
 ## Features
@@ -58,6 +81,7 @@ You                              Your friend
 |---|---|
 | 🔐 **End‑to‑end encrypted** | XChaCha20‑Poly1305. The server never sees the key. Ever. |
 | 🔗 **Key in URL fragment** | The `#key` part never hits server logs, proxies, or HTTP headers |
+| 🔒 **HTTPS by default** | Auto‑generated self‑signed TLS cert — encrypted on the wire, zero config |
 | 💥 **Self‑destruct** | Expire by time, by download count, or both |
 | 📱 **Works on phones** | Receiver only needs a browser. No app. No account. No signup. |
 | 📁 **Send folders** | Directories auto‑pack to `.tar.gz` before encryption |
@@ -65,6 +89,7 @@ You                              Your friend
 | 🔑 **Optional password** | Argon2id key derivation (64MB memory‑hard, GPU‑resistant) |
 | 📦 **Single binary** | No runtime, no Docker, no config files. Just one executable. |
 | 📲 **QR code** | Because typing URLs is for people who still use fax machines |
+| 📥 **Receive mode** | `ded receive` — phone‑to‑PC uploads with browser encryption |
 
 ### Security Hardening
 
@@ -157,7 +182,7 @@ cargo uninstall deadrop
 
 ## Usage
 
-### The basics
+### Send mode (default)
 
 ```bash
 # Send a file
@@ -168,6 +193,21 @@ ded ./tax-returns-2025/
 
 # That's it. That's the tool.
 ```
+
+### Receive mode
+
+```bash
+# Receive a file from phone → PC
+ded receive
+
+# Receive to a specific directory
+ded receive -o ~/Downloads/
+
+# Custom port
+ded receive -p 9090
+```
+
+Opens a browser upload page on your LAN. Scan the QR from your phone, pick a file, and it's encrypted in-browser → sent to your PC → decrypted → saved. One upload, then the server self-destructs.
 
 ### The spicy options
 
@@ -200,7 +240,7 @@ ded ./plans.pdf -n 1 -e 30s --pw "this-message-will-self-destruct"
           ⚡ zero-knowledge encrypted file sharing ⚡
 
   ┌──────────────────────────────────────────────────┐
-  │  URL  http://192.168.1.42:8080/d/a3f9c1b2#xK9m  │
+  │  URL  https://192.168.1.42:8080/d/a3f9c1b2#xK9m │
   │                                                   │
   │  ├─ File       secret.pdf                         │
   │  ├─ Size       4.2 MB                             │
@@ -208,6 +248,8 @@ ded ./plans.pdf -n 1 -e 30s --pw "this-message-will-self-destruct"
   │  ├─ Downloads  1                                  │
   │  └─ Crypto     XChaCha20-Poly1305                 │
   └──────────────────────────────────────────────────┘
+
+  🔒 Self-signed TLS — browser will show a warning (safe to proceed)
 
   █▀▀▀▀▀█ ▀▀▀█▄█ █▀▀▀▀▀█     <- QR code appears here
   █ ███ █ █▀█ ▀▄  █ ███ █        scan with phone
@@ -220,6 +262,8 @@ A clean, dark download page in their browser. Click **"Download & Decrypt"** →
 
 ## Flags Cheat Sheet
 
+### Send mode
+
 | Flag | Short | Default | What it does |
 |---|---|---|---|
 | `--port` | `-p` | `8080` | Port to listen on |
@@ -229,29 +273,89 @@ A clean, dark download page in their browser. Click **"Download & Decrypt"** →
 | `--bind` | `-b` | `0.0.0.0` | Bind address |
 | `--no-qr` | — | `false` | Hide QR code |
 
+### Receive mode
+
+| Flag | Short | Default | What it does |
+|---|---|---|---|
+| `--port` | `-p` | `8080` | Port to listen on |
+| `--output` | `-o` | `.` | Directory to save received files |
+| `--bind` | `-b` | `0.0.0.0` | Bind address |
+| `--no-qr` | — | `false` | Hide QR code |
+
 ## How It Works
 
+### Send flow
+
 ```
-Sender                          Server (your machine)                 Receiver
-  │                                    │                                  │
-  │  1. Encrypt file with random key   │                                  │
-  │  2. Store ciphertext on disk       │                                  │
-  │  3. Key goes in URL #fragment      │                                  │
-  │  ──────────────────────────────►   │                                  │
-  │                                    │   4. Receiver opens URL          │
-  │                                    │   ◄──────────────────────────────│
-  │                                    │   5. Serve encrypted blob        │
-  │                                    │   ──────────────────────────────►│
-  │                                    │                                  │
-  │                                    │   6. Browser extracts #key       │
-  │                                    │      (stripped from URL instantly)│
-  │                                    │   7. WASM decrypts locally       │
-  │                                    │   8. File downloads              │
-  │                                    │   9. Key wiped from JS memory    │
-  │                                    │                                  │
-  │                                    │   💥 Self-destruct               │
-  │                                    │   🔥 Drop marked as burned      │
-  │                                    │   🛑 Server shuts down           │
+  ┌──────────┐          ┌────────────────────┐          ┌──────────┐
+  │  Sender  │          │   Server (your PC) │          │ Receiver │
+  └─────┬────┘          └─────────┬──────────┘          └─────┬────┘
+        │                         │                           │
+        │  1. Generate random     │                           │
+        │     256-bit key         │                           │
+        │                         │                           │
+        │  2. Encrypt file        │                           │
+        │     XChaCha20-Poly1305  │                           │
+        │                         │                           │
+        │  3. Store ciphertext ──►│                           │
+        │                         │                           │
+        │  4. Key → URL #fragment │                           │
+        │     (never sent to      │                           │
+        │      server over HTTP)  │                           │
+        │                         │                           │
+        │  5. Share link ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─►│
+        │     (Signal, QR, etc.)  │                           │
+        │                         │                           │
+        │                         │◄── 6. Open link ──────────│
+        │                         │                           │
+        │                         │─── 7. Serve encrypted ──►│
+        │                         │       blob (HTTPS)        │
+        │                         │                           │
+        │                         │    8. Browser extracts    │
+        │                         │       #key (never sent)   │
+        │                         │                           │
+        │                         │    9. WASM decrypts       │
+        │                         │       locally in browser  │
+        │                         │                           │
+        │                         │   10. File downloads      │
+        │                         │       to device           │
+        │                         │                           │
+        │  ┌─────────────────────────────────────────┐        │
+        │  │  💥 Self-destruct │ 🔥 Burned │ 🛑 Off │        │
+        │  └─────────────────────────────────────────┘        │
+        ▼                                                     ▼
+```
+
+### Receive flow
+
+```
+  ┌──────────┐          ┌────────────────────┐          ┌──────────┐
+  │ Receiver │          │   Server (your PC) │          │  Phone   │
+  │   (PC)   │          │                    │          │ (sender) │
+  └─────┬────┘          └─────────┬──────────┘          └─────┬────┘
+        │                         │                           │
+        │  ded receive            │                           │
+        │  ━━━━━━━━━━━━           │                           │
+        │                         │                           │
+        │  1. Generate key ──────►│                           │
+        │  2. Key → QR code       │                           │
+        │                         │                           │
+        │                         │◄── 3. Scan QR, open ─────│
+        │                         │       upload page         │
+        │                         │                           │
+        │                         │    4. Pick file           │
+        │                         │    5. WASM encrypts       │
+        │                         │       in-browser          │
+        │                         │                           │
+        │                         │◄── 6. Upload ciphertext ─│
+        │                         │                           │
+        │  7. Server decrypts  ◄──│                           │
+        │  8. Saves to disk       │                           │
+        │                         │                           │
+        │  ┌──────────────────────────────────────┐           │
+        │  │  ✅ Saved │ 💥 Self-destruct │ 🛑 Off │          │
+        │  └──────────────────────────────────────┘           │
+        ▼                                                     ▼
 ```
 
 **The critical insight**: the `#fragment` in a URL is **never sent to the server**. Not in HTTP requests, not in logs, not in referrer headers. The server literally cannot learn the key even if it tried.
@@ -261,13 +365,21 @@ Sender                          Server (your machine)                 Receiver
 ### Defense in Depth
 
 ```
-Layer 1: Encryption      XChaCha20-Poly1305 (256-bit key, AEAD)
-Layer 2: Zero-knowledge  Key in URL fragment — server never sees it
-Layer 3: Network         Security headers, CSP, no-referrer, no-cache
-Layer 4: Access control  IP pinning + rate limiting + 16-char drop IDs
-Layer 5: Anti-forensics  mlock() + zeroize + zero-write disk deletion
-Layer 6: Browser         Fragment auto-clear + auto-expire + key wipe
-Layer 7: Self-destruct   One download → burn page → server shutdown
+  ╔══════════════════════════════════════════════════════════════════╗
+  ║  Layer 7 │ Self-destruct    One download → burn → server off    ║
+  ╠══════════╪══════════════════════════════════════════════════════╣
+  ║  Layer 6 │ Browser          Fragment auto-clear + auto-expire   ║
+  ╠══════════╪══════════════════════════════════════════════════════╣
+  ║  Layer 5 │ Anti-forensics   mlock() + zeroize + zero-write     ║
+  ╠══════════╪══════════════════════════════════════════════════════╣
+  ║  Layer 4 │ Access control   IP pinning + rate limit + 64-bit ID║
+  ╠══════════╪══════════════════════════════════════════════════════╣
+  ║  Layer 3 │ Network          HTTPS (TLS 1.3) + security headers ║
+  ╠══════════╪══════════════════════════════════════════════════════╣
+  ║  Layer 2 │ Zero-knowledge   Key in URL #fragment only          ║
+  ╠══════════╪══════════════════════════════════════════════════════╣
+  ║  Layer 1 │ Encryption       XChaCha20-Poly1305 (256-bit, AEAD) ║
+  ╚══════════╧══════════════════════════════════════════════════════╝
 ```
 
 ### Threat Model
@@ -278,6 +390,7 @@ Layer 7: Self-destruct   One download → burn page → server shutdown
 |---|---|
 | Server operator learning file contents | Zero‑knowledge — key never reaches server |
 | Man‑in‑the‑middle reading the key | Key lives in `#fragment`, never transmitted over HTTP |
+| Network eavesdropping | HTTPS with auto‑generated TLS cert (rustls) |
 | Server logs leaking the key | Fragments aren't logged by any HTTP server or proxy |
 | Brute force on encryption | XChaCha20-Poly1305 with 256‑bit keys |
 | GPU attacks on passwords | Argon2id with 64MB memory cost |
@@ -306,6 +419,7 @@ Layer 7: Self-destruct   One download → burn page → server shutdown
 |---|---|---|
 | Encryption | XChaCha20‑Poly1305 | 256‑bit, extended nonce, AEAD. Used by WireGuard, Cloudflare, etc. |
 | KDF | Argon2id | Memory‑hard, GPU‑resistant. Winner of the Password Hashing Competition |
+| TLS | rustls + rcgen | Auto‑generated self‑signed cert per session. No OpenSSL dependency. |
 | Chunk size | 64KB | Balances streaming performance vs. auth tag overhead |
 | Server | Axum (Rust) | Async, zero-copy, no garbage collector |
 | Rate limiter | tower_governor | Token bucket per IP — prevents brute force |
@@ -348,6 +462,9 @@ A: They can't. The download is IP-pinned to the first device that connects. A se
 **Q: What if I visit a dead link?**
 A: If the file was already downloaded, you'll see a burn page: "🔥 This drop was already downloaded and destroyed." If it expired, you get a standard not-found message.
 
+**Q: Why does the browser show a certificate warning?**
+A: Deadrop auto-generates a self-signed TLS certificate for HTTPS. It's fully encrypted — your browser just doesn't recognize the cert authority. Click "Proceed" / "Advanced → Continue" and you're good.
+
 **Q: Why Rust?**
 A: Because we wanted the binary to be fast, safe, and have zero dependencies. Also because we enjoy fighting the borrow checker on Friday nights.
 
@@ -355,13 +472,13 @@ A: Because we wanted the binary to be fast, safe, and have zero dependencies. Al
 
 PRs welcome. Here's what's on the radar:
 
+- [x] ~~Built‑in HTTPS (rustls + auto‑generated certs)~~
+- [x] ~~`ded receive` mode (pull instead of push)~~
 - [ ] Receiver‑side streaming decryption for huge files on mobile
-- [ ] Built‑in HTTPS (rustls + auto‑generated certs)
-- [ ] `ded receive` mode (pull instead of push)
 - [ ] Clipboard mode (`echo "secret" | ded -`)
 - [ ] Tor hidden service mode
 - [ ] Multi‑file drops
-- [ ] Web UI upload mode
+- [ ] Web UI drag-and-drop improvements
 
 ## License
 
