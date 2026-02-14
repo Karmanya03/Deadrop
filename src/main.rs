@@ -12,8 +12,8 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "dd",
-    bin_name = "dd",
+    name = "ded",
+    bin_name = "ded",
     about = "🔒 Encrypted dead drop. One command. One link. Gone.",
     version,
     author,

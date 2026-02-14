@@ -34,7 +34,7 @@ This is that, but for files. And the briefcase is encrypted with military-grade 
 ```
 You                              Your friend
  │                                    │
- │  dd ./secret-plans.pdf             │
+ │  ded ./secret-plans.pdf            │
  │  ─────────────────────►            │
  │  here's a link + QR code          │
  │                                    │
@@ -90,20 +90,20 @@ Grab the latest release for your platform from [**Releases**](https://github.com
 
 | Platform | Binary | Architecture |
 |---|---|---|
-| **Windows** | [`dd-windows-x86_64.exe`](https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-windows-x86_64.exe) | x86_64 |
-| **Linux** | [`dd-linux-x86_64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-linux-x86_64) | x86_64 (musl, static) |
-| **Linux** | [`dd-linux-aarch64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-linux-aarch64) | ARM64 (Raspberry Pi, etc.) |
-| **macOS** | [`dd-macos-x86_64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-macos-x86_64) | Intel |
-| **macOS** | [`dd-macos-aarch64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
+| **Windows** | [`ded-windows-x86_64.exe`](https://github.com/Karmanya03/Deadrop/releases/latest/download/ded-windows-x86_64.exe) | x86_64 |
+| **Linux** | [`ded-linux-x86_64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/ded-linux-x86_64) | x86_64 (musl, static) |
+| **Linux** | [`ded-linux-aarch64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/ded-linux-aarch64) | ARM64 (Raspberry Pi, etc.) |
+| **macOS** | [`ded-macos-x86_64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/ded-macos-x86_64) | Intel |
+| **macOS** | [`ded-macos-aarch64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/ded-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
 
 **Quick install (Linux/macOS):**
 
 ```bash
 # Linux x86_64
-curl -L https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-linux-x86_64 -o dd && chmod +x dd && sudo mv dd /usr/local/bin/
+curl -L https://github.com/Karmanya03/Deadrop/releases/latest/download/ded-linux-x86_64 -o ded && chmod +x ded && sudo mv ded /usr/local/bin/
 
 # macOS Apple Silicon
-curl -L https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-macos-aarch64 -o dd && chmod +x dd && sudo mv dd /usr/local/bin/
+curl -L https://github.com/Karmanya03/Deadrop/releases/latest/download/ded-macos-aarch64 -o ded && chmod +x ded && sudo mv ded /usr/local/bin/
 ```
 
 ### Via cargo
@@ -118,7 +118,7 @@ cargo install deadrop
 git clone https://github.com/Karmanya03/Deadrop.git
 cd Deadrop
 cargo build --release
-# Binary at: target/release/dd
+# Binary at: target/release/ded
 ```
 
 ## Usage
@@ -127,10 +127,10 @@ cargo build --release
 
 ```bash
 # Send a file
-dd ./secret.pdf
+ded ./secret.pdf
 
 # Send a folder
-dd ./tax-returns-2025/
+ded ./tax-returns-2025/
 
 # That's it. That's the tool.
 ```
@@ -139,19 +139,19 @@ dd ./tax-returns-2025/
 
 ```bash
 # Self-destruct after 1 download, expire in 10 minutes
-dd ./evidence.zip -n 1 -e 10m
+ded ./evidence.zip -n 1 -e 10m
 
 # Password-protected (because you're paranoid, and that's ok)
-dd ./passwords.csv --pw "correct-horse-battery-staple"
+ded ./passwords.csv --pw "correct-horse-battery-staple"
 
 # Custom port
-dd ./file.txt -p 4200
+ded ./file.txt -p 4200
 
 # No QR code (you hate fun)
-dd ./file.txt --no-qr
+ded ./file.txt --no-qr
 
 # Go full Mission Impossible
-dd ./plans.pdf -n 1 -e 30s --pw "this-message-will-self-destruct"
+ded ./plans.pdf -n 1 -e 30s --pw "this-message-will-self-destruct"
 ```
 
 ### What you see
@@ -323,8 +323,8 @@ PRs welcome. Here's what's on the radar:
 
 - [ ] Receiver‑side streaming decryption for huge files on mobile
 - [ ] Built‑in HTTPS (rustls + auto‑generated certs)
-- [ ] `dd receive` mode (pull instead of push)
-- [ ] Clipboard mode (`echo "secret" | dd -`)
+- [ ] `ded receive` mode (pull instead of push)
+- [ ] Clipboard mode (`echo "secret" | ded -`)
 - [ ] Tor hidden service mode
 - [ ] Multi‑file drops
 - [ ] Web UI upload mode

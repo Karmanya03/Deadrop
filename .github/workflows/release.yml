@@ -15,19 +15,19 @@ jobs:
         include:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
-            name: dd-windows-x86_64.exe
+            name: ded-windows-x86_64.exe
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            name: dd-linux-x86_64
+            name: ded-linux-x86_64
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            name: dd-linux-aarch64
+            name: ded-linux-aarch64
           - target: x86_64-apple-darwin
             os: macos-latest
-            name: dd-macos-x86_64
+            name: ded-macos-x86_64
           - target: aarch64-apple-darwin
             os: macos-latest
-            name: dd-macos-aarch64
+            name: ded-macos-aarch64
 
     runs-on: ${{ matrix.os }}
 
@@ -71,12 +71,12 @@ jobs:
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
         run: |
-          mv target/${{ matrix.target }}/release/dd ${{ matrix.name }}
+          mv target/${{ matrix.target }}/release/ded ${{ matrix.name }}
           chmod +x ${{ matrix.name }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
-        run: mv target/${{ matrix.target }}/release/dd.exe ${{ matrix.name }}
+        run: mv target/${{ matrix.target }}/release/ded.exe ${{ matrix.name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -100,8 +100,8 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            artifacts/dd-windows-x86_64.exe/dd-windows-x86_64.exe
-            artifacts/dd-linux-x86_64/dd-linux-x86_64
-            artifacts/dd-linux-aarch64/dd-linux-aarch64
-            artifacts/dd-macos-x86_64/dd-macos-x86_64
-            artifacts/dd-macos-aarch64/dd-macos-aarch64
+            artifacts/ded-windows-x86_64.exe/ded-windows-x86_64.exe
+            artifacts/ded-linux-x86_64/ded-linux-x86_64
+            artifacts/ded-linux-aarch64/ded-linux-aarch64
+            artifacts/ded-macos-x86_64/ded-macos-x86_64
+            artifacts/ded-macos-aarch64/ded-macos-aarch64
