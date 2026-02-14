@@ -51,6 +51,7 @@ jobs:
         run: cargo install wasm-pack
 
       - name: Build WASM
+        shell: bash
         run: |
           cd wasm
           wasm-pack build --target web --out-dir pkg
