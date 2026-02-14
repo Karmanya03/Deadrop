@@ -1,0 +1,6 @@
+@"
+/target
+/wasm/target
+/wasm/pkg
+*.pdb
+"@ | Out-File -Encoding utf8 .gitignoregit add .

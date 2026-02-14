@@ -1,0 +1,137 @@
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use indicatif::ProgressBar;
+
+/// Archives a folder into an in-memory .tar.gz and returns (bytes, display_name)
+pub fn compress_folder(
+    path: &Path,
+    progress: &ProgressBar,
+) -> anyhow::Result<(Vec<u8>, String)> {
+    if !path.is_dir() {
+        return Err(anyhow::anyhow!("{} is not a directory", path.display()));
+    }
+
+    let folder_name = path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+
+    let archive_name = format!("{}.tar.gz", folder_name);
+
+    progress.set_message(format!("Archiving {}...", folder_name));
+
+    // Count total files for progress
+    let total_files = count_files(path)?;
+    progress.set_length(total_files);
+    progress.set_position(0);
+
+    // Create tar.gz in memory
+    let mut compressed_bytes: Vec<u8> = Vec::new();
+
+    {
+        let encoder = GzEncoder::new(&mut compressed_bytes, Compression::fast());
+        let mut tar_builder = tar::Builder::new(encoder);
+
+        // Follow symlinks for safety, don't include parent dirs
+        tar_builder.follow_symlinks(false);
+
+        // Recursively add the folder
+        add_dir_recursive(&mut tar_builder, path, Path::new(&folder_name), progress)?;
+
+        // Finalize tar
+        let encoder = tar_builder.into_inner()?;
+        encoder.finish()?;
+    }
+
+    progress.finish_with_message(format!(
+        "Archived {} ({} files → {})",
+        folder_name,
+        total_files,
+        bytesize::ByteSize::b(compressed_bytes.len() as u64)
+    ));
+
+    Ok((compressed_bytes, archive_name))
+}
+
+/// Recursively add directory contents to tar archive
+fn add_dir_recursive<W: Write>(
+    builder: &mut tar::Builder<W>,
+    src_path: &Path,
+    archive_path: &Path,
+    progress: &ProgressBar,
+) -> anyhow::Result<()> {
+    let entries = std::fs::read_dir(src_path)?;
+
+    for entry in entries {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let entry_name = entry.file_name();
+        let src_child = entry.path();
+        let archive_child = archive_path.join(&entry_name);
+
+        if file_type.is_file() {
+            let mut file = std::fs::File::open(&src_child)?;
+            let metadata = file.metadata()?;
+
+            let mut header = tar::Header::new_gnu();
+            header.set_path(&archive_child)?;
+            header.set_size(metadata.len());
+            header.set_mode(0o644);
+            header.set_mtime(
+                metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            );
+            header.set_cksum();
+
+            builder.append(&header, &mut file)?;
+            progress.inc(1);
+        } else if file_type.is_dir() {
+            // Skip hidden dirs and common junk
+            let name_str = entry_name.to_string_lossy();
+            if name_str.starts_with('.') || name_str == "node_modules" || name_str == "target" {
+                continue;
+            }
+
+            let mut header = tar::Header::new_gnu();
+            header.set_path(&archive_child)?;
+            header.set_size(0);
+            header.set_mode(0o755);
+            header.set_entry_type(tar::EntryType::Directory);
+            header.set_cksum();
+
+            builder.append(&header, &mut std::io::empty())?;
+
+            // Recurse
+            add_dir_recursive(builder, &src_child, &archive_child, progress)?;
+        }
+        // Skip symlinks for security
+    }
+
+    Ok(())
+}
+
+/// Count total files in a directory (recursive)
+fn count_files(path: &Path) -> anyhow::Result<u64> {
+    let mut count = 0u64;
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let ft = entry.file_type()?;
+        if ft.is_file() {
+            count += 1;
+        } else if ft.is_dir() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !name_str.starts_with('.') && name_str != "node_modules" && name_str != "target" {
+                count += count_files(&entry.path())?;
+            }
+        }
+    }
+    Ok(count)
+}
