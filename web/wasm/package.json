@@ -1,0 +1,13 @@
+{
+  "name": "deadrop-wasm",
+  "type": "module",
+  "version": "0.1.1",
+  "files": [
+    "deadrop_wasm_bg.wasm",
+    "deadrop_wasm.js"
+  ],
+  "main": "deadrop_wasm.js",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
