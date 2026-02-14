@@ -224,13 +224,16 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
     );
 
     // Build router with security layers
-    let app = Router::new()
+    // Build router — rate-limit only API/page routes, not static assets
+    let rate_limited = Router::new()
         .route("/d/{id}", get(serve_download_page))
         .route("/api/blob/{id}", get(serve_blob))
         .route("/api/meta/{id}", get(serve_meta))
+        .layer(GovernorLayer::new(governor_conf));
+
+    let app = rate_limited
         .route("/assets/{*path}", get(serve_web_asset))
         .route("/wasm/{*path}", get(serve_wasm_asset))
-        .layer(GovernorLayer::new(governor_conf))
         .layer(middleware::from_fn(security_headers))
         .with_state(state.clone());
 
