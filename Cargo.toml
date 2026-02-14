@@ -1,6 +1,6 @@
 [package]
 name = "deadrop"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 description = "Zero-knowledge encrypted dead drop. One binary. One command. Gone."
 license = "MIT"

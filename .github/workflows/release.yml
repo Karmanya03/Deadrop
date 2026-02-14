@@ -62,20 +62,22 @@ jobs:
 
       - name: Build (cross - Linux aarch64)
         if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: cross build --release --target ${{ matrix.target }} --locked
+        run: cross build --release --target ${{ matrix.target }}
 
       - name: Build (cargo - all others)
         if: matrix.target != 'aarch64-unknown-linux-musl'
-        run: cargo build --release --target ${{ matrix.target }} --locked
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Rename binary (Unix)
         if: runner.os != 'Windows'
+        shell: bash
         run: |
           mv target/${{ matrix.target }}/release/ded ${{ matrix.name }}
           chmod +x ${{ matrix.name }}
 
       - name: Rename binary (Windows)
         if: runner.os == 'Windows'
+        shell: bash
         run: mv target/${{ matrix.target }}/release/ded.exe ${{ matrix.name }}
 
       - name: Upload artifact

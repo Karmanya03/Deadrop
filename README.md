@@ -84,6 +84,14 @@ You                              Your friend
 
 ## Installation
 
+### 🚀 One-line install (Linux/macOS)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.sh | bash
+```
+
+> Detects your OS & architecture automatically, downloads the right binary, and adds it to your PATH.
+
 ### Download a binary
 
 Grab the latest release for your platform from [**Releases**](https://github.com/Karmanya03/Deadrop/releases).
