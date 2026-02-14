@@ -86,21 +86,39 @@ You                              Your friend
 
 ### Download a binary
 
-Grab the latest release for your OS from [**Releases**](https://github.com/Karmanya03/Deadrop/releases).
+Grab the latest release for your platform from [**Releases**](https://github.com/Karmanya03/Deadrop/releases).
 
-### Build from source (you rebel)
+| Platform | Binary | Architecture |
+|---|---|---|
+| **Windows** | [`dd-windows-x86_64.exe`](https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-windows-x86_64.exe) | x86_64 |
+| **Linux** | [`dd-linux-x86_64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-linux-x86_64) | x86_64 (musl, static) |
+| **Linux** | [`dd-linux-aarch64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-linux-aarch64) | ARM64 (Raspberry Pi, etc.) |
+| **macOS** | [`dd-macos-x86_64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-macos-x86_64) | Intel |
+| **macOS** | [`dd-macos-aarch64`](https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-macos-aarch64) | Apple Silicon (M1/M2/M3/M4) |
+
+**Quick install (Linux/macOS):**
 
 ```bash
-git clone https://github.com/Karmanya03/Deadrop.git
-cd Deadrop
-cargo build --release
-# Binary at: target/release/dd
+# Linux x86_64
+curl -L https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-linux-x86_64 -o dd && chmod +x dd && sudo mv dd /usr/local/bin/
+
+# macOS Apple Silicon
+curl -L https://github.com/Karmanya03/Deadrop/releases/latest/download/dd-macos-aarch64 -o dd && chmod +x dd && sudo mv dd /usr/local/bin/
 ```
 
 ### Via cargo
 
 ```bash
 cargo install deadrop
+```
+
+### Build from source
+
+```bash
+git clone https://github.com/Karmanya03/Deadrop.git
+cd Deadrop
+cargo build --release
+# Binary at: target/release/dd
 ```
 
 ## Usage

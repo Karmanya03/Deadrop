@@ -2,5 +2,6 @@
 /target
 /wasm/target
 /wasm/pkg
+test-folder/
 *.pdb
 "@ | Out-File -Encoding utf8 .gitignoregit add .
