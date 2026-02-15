@@ -1,224 +1,591 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>☠ deadrop</title>
-    <link rel="stylesheet" href="/assets/style.css">
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>☠</text></svg>">
-    <style>
-        /* ─── Responsive fallback (works even without style.css) ─── */
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>deadrop — encrypted drop</title>
+<link rel="icon" type="image/png" href="/assets/deadrop-logo.png">
+<link rel="stylesheet" href="/assets/style.css">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --border: #1e1e2e;
+    --text: #e0e0e0;
+    --dim: #666680;
+    --accent: #00ff88;
+    --accent-dim: #00cc6a;
+    --danger: #ff4444;
+    --warn: #ffaa00;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+  }
+  .container {
+    max-width: 520px;
+    width: 100%;
+  }
+  .logo {
+    text-align: center;
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: var(--accent);
+    margin-bottom: 2rem;
+    letter-spacing: 0.2em;
+  }
+  .logo span { color: var(--dim); font-weight: normal; font-size: 0.8rem; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2rem;
+    margin-bottom: 1.5rem;
+  }
+  .file-info { display: grid; gap: 0.75rem; }
+  .file-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .file-row:last-child { border-bottom: none; }
+  .file-label { color: var(--dim); font-size: 0.85rem; }
+  .file-value { color: var(--text); font-weight: 500; }
+  .file-value.filename { color: var(--accent); word-break: break-all; }
 
-        html, body {
-            height: 100%;
-            width: 100%;
-            overflow-x: hidden;
-            background: #0a0a0a;
-            color: #e0e0e0;
-            font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
-        }
+  /* Password prompt */
+  .pw-section {
+    margin-top: 1.5rem;
+    display: none;
+  }
+  .pw-section.active { display: block; }
+  .pw-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--warn);
+    font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+    font-weight: 600;
+  }
+  .pw-input-group {
+    display: flex;
+    gap: 0.5rem;
+  }
+  .pw-input {
+    flex: 1;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.75rem 1rem;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 0.95rem;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  .pw-input:focus { border-color: var(--accent); }
+  .pw-input::placeholder { color: var(--dim); }
 
-        body {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            padding: 1rem;
-        }
+  /* Buttons */
+  .btn {
+    display: block;
+    width: 100%;
+    padding: 1rem;
+    border: none;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: #000;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: var(--accent-dim);
+    transform: translateY(-1px);
+  }
+  .btn-primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .btn-sm {
+    width: auto;
+    padding: 0.75rem 1.5rem;
+    font-size: 0.9rem;
+  }
 
-        .container {
-            width: 100%;
-            max-width: 520px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 1.2rem;
-            padding: 1rem;
-        }
+  /* Progress */
+  .progress-section { display: none; }
+  .progress-section.active { display: block; }
+  .progress-bar-track {
+    width: 100%;
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 1rem 0 0.5rem;
+  }
+  .progress-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 3px;
+    width: 0%;
+    transition: width 0.3s;
+  }
+  .progress-text {
+    font-size: 0.8rem;
+    color: var(--dim);
+    text-align: center;
+  }
 
-        .logo-img {
-            max-width: min(280px, 70vw);
-            height: auto;
-            margin-bottom: 0.5rem;
-        }
+  /* Status messages */
+  .status {
+    text-align: center;
+    padding: 1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    margin-top: 1rem;
+    display: none;
+  }
+  .status.active { display: block; }
+  .status.error {
+    background: rgba(255,68,68,0.1);
+    border: 1px solid var(--danger);
+    color: var(--danger);
+  }
+  .status.success {
+    background: rgba(0,255,136,0.1);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .status.deriving {
+    background: rgba(255,170,0,0.1);
+    border: 1px solid var(--warn);
+    color: var(--warn);
+  }
 
-        .card {
-            width: 100%;
-            background: #141414;
-            border: 1px solid #2a2a2a;
-            border-radius: 12px;
-            padding: 1rem 1.2rem;
-            overflow: hidden;
-        }
+  /* Burned / expired states */
+  .burned {
+    text-align: center;
+    padding: 3rem 2rem;
+  }
+  .burned-icon { font-size: 4rem; margin-bottom: 1rem; }
+  .burned-title { font-size: 1.3rem; color: var(--danger); margin-bottom: 0.5rem; }
+  .burned-sub { color: var(--dim); font-size: 0.9rem; }
 
-        .meta-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 0.55rem 0;
-            border-bottom: 1px solid #1e1e1e;
-            gap: 1rem;
-        }
+  .lock-icon { font-size: 1.2rem; }
 
-        .meta-row:last-child { border-bottom: none; }
-
-        .meta-label {
-            color: #666;
-            font-size: 0.85rem;
-            white-space: nowrap;
-        }
-
-        .meta-value {
-            color: #e0e0e0;
-            font-size: 0.85rem;
-            text-align: right;
-            word-break: break-all;
-        }
-
-        .progress-container {
-            width: 100%;
-            display: none;
-        }
-
-        .progress-bar {
-            width: 100%;
-            height: 6px;
-            background: #1e1e1e;
-            border-radius: 3px;
-            overflow: hidden;
-        }
-
-        .progress-fill {
-            height: 100%;
-            width: 0%;
-            background: #00ff88;
-            border-radius: 3px;
-            transition: width 0.3s ease;
-        }
-
-        .progress-text {
-            text-align: center;
-            font-size: 0.8rem;
-            color: #666;
-            margin-top: 0.4rem;
-        }
-
-        .status {
-            text-align: center;
-            font-size: 0.9rem;
-            color: #888;
-        }
-
-        .error { color: #ff4444; }
-        .success { color: #00ff88; }
-
-        .btn {
-            background: #00ff88;
-            color: #000;
-            border: none;
-            padding: 0.8rem 2rem;
-            font-size: 1rem;
-            font-weight: 700;
-            font-family: inherit;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: background 0.2s, transform 0.1s;
-            width: 100%;
-            max-width: 320px;
-        }
-
-        .btn:hover { background: #00cc6a; transform: translateY(-1px); }
-        .btn:active { transform: translateY(0); }
-        .btn:disabled { background: #333; color: #666; cursor: not-allowed; transform: none; }
-
-        .shield {
-            text-align: center;
-            font-size: 0.8rem;
-            color: #555;
-            padding: 0.5rem;
-        }
-
-        .footer {
-            margin-top: 2rem;
-            text-align: center;
-            font-size: 0.75rem;
-            color: #444;
-        }
-
-        .footer a {
-            color: #00ff88;
-            text-decoration: none;
-        }
-
-        .footer a:hover { text-decoration: underline; }
-
-        /* ─── Responsive breakpoints ─── */
-        @media (max-width: 480px) {
-            body { padding: 0.75rem; }
-            .container { padding: 0.5rem; gap: 1rem; }
-            .logo-img { max-width: 200px; }
-            .card { padding: 0.8rem; }
-            .meta-label, .meta-value { font-size: 0.78rem; }
-            .btn { padding: 0.7rem 1.5rem; font-size: 0.9rem; }
-        }
-
-        @media (min-width: 768px) {
-            .container { max-width: 560px; }
-        }
-
-        @media (min-height: 800px) {
-            .container { gap: 1.5rem; }
-        }
-    </style>
+  @media (max-width: 480px) {
+    body { padding: 1rem; }
+    .card { padding: 1.5rem; }
+    .pw-input-group { flex-direction: column; }
+  }
+</style>
 </head>
 <body>
-    <div class="container">
-        <img src="/assets/deadrop-logo.png" alt="deadrop" class="logo-img">
+<div class="container">
+    <img src="/assets/deadrop-logo.png" alt="deadrop" class="logo-img" />
 
-        <div class="card" id="meta-card" style="display:none">
-            <div class="meta-row">
-                <span class="meta-label">File</span>
-                <span class="meta-value" id="meta-filename"></span>
-            </div>
-            <div class="meta-row">
-                <span class="meta-label">Size</span>
-                <span class="meta-value" id="meta-size"></span>
-            </div>
-            <div class="meta-row">
-                <span class="meta-label">Expires</span>
-                <span class="meta-value" id="meta-expires"></span>
-            </div>
-            <div class="meta-row">
-                <span class="meta-label">Downloads left</span>
-                <span class="meta-value" id="meta-downloads"></span>
-            </div>
-            <div class="meta-row">
-                <span class="meta-label">Encryption</span>
-                <span class="meta-value">XChaCha20-Poly1305</span>
-            </div>
+  <!-- Loading state -->
+  <div id="loading" class="card" style="text-align:center; color:var(--dim);">
+    ⏳ Loading drop metadata...
+  </div>
+
+  <!-- Burned state -->
+  <div id="burned" class="card" style="display:none;">
+    <div class="burned">
+      <div class="burned-icon">🔥</div>
+      <div class="burned-title">This drop has been destroyed</div>
+      <div class="burned-sub">It was already downloaded and self-destructed.<br/>Like it never existed.</div>
+    </div>
+  </div>
+
+  <!-- Not found state -->
+  <div id="notfound" class="card" style="display:none;">
+    <div class="burned">
+      <div class="burned-icon">👻</div>
+      <div class="burned-title">Drop not found</div>
+      <div class="burned-sub">This drop has expired or never existed.<br/>The void stares back.</div>
+    </div>
+  </div>
+
+  <!-- Main download card -->
+  <div id="main" style="display:none;">
+    <div class="card">
+      <div class="file-info">
+        <div class="file-row">
+          <span class="file-label">📄 File</span>
+          <span class="file-value filename" id="filename">—</span>
         </div>
-
-        <div class="progress-container" id="progress-container">
-            <div class="progress-bar">
-                <div class="progress-fill" id="progress-fill"></div>
-            </div>
-            <div class="progress-text" id="progress-text">Initializing...</div>
+        <div class="file-row">
+          <span class="file-label">📦 Size</span>
+          <span class="file-value" id="filesize">—</span>
         </div>
-
-        <p id="status" class="status">Loading...</p>
-        <button id="btn" class="btn" style="display:none">Download &amp; Decrypt</button>
-
-        <div class="shield" id="shield" style="display:none">
-            🛡 End-to-end encrypted &mdash; decryption key never leaves your device
+        <div class="file-row">
+          <span class="file-label">⏰ Expires</span>
+          <span class="file-value" id="expires">—</span>
         </div>
-
-        <div class="footer">
-            Powered by <a href="https://github.com/Karmanya03/Deadrop">deadrop</a> &mdash; zero-knowledge encrypted file sharing
+        <div class="file-row">
+          <span class="file-label">🔢 Downloads left</span>
+          <span class="file-value" id="remaining">—</span>
         </div>
+        <div class="file-row">
+          <span class="file-label">🔐 Encryption</span>
+          <span class="file-value">XChaCha20-Poly1305</span>
+        </div>
+      </div>
+
+      <!-- Password section (hidden by default) -->
+      <div id="pw-section" class="pw-section">
+        <div class="pw-label">
+          <span class="lock-icon">🔑</span> This drop requires a password
+        </div>
+        <div class="pw-input-group">
+          <input type="password" id="pw-input" class="pw-input"
+                 placeholder="Enter password..." autocomplete="off"
+                 autofocus />
+        </div>
+        <div id="pw-status" class="status deriving">
+          🔄 Deriving key with Argon2id... this may take a few seconds
+        </div>
+      </div>
     </div>
 
-    <script type="module" src="/assets/app.js"></script>
+    <!-- Download button (for non-password drops) -->
+    <button id="btn-download" class="btn btn-primary" onclick="startDownload()">
+      ⬇️ Download & Decrypt
+    </button>
+
+    <!-- Unlock + Download button (for password drops) -->
+    <button id="btn-unlock" class="btn btn-primary" style="display:none;" onclick="unlockAndDownload()">
+      🔓 Unlock & Download
+    </button>
+
+    <!-- Progress -->
+    <div id="progress-section" class="progress-section">
+      <div class="progress-bar-track">
+        <div id="progress-fill" class="progress-bar-fill"></div>
+      </div>
+      <div id="progress-text" class="progress-text">Downloading...</div>
+    </div>
+
+    <div id="status-msg" class="status"></div>
+  </div>
+</div>
+
+<script>
+  // ═══════════════════════════════════════════════════
+  // State
+  // ═══════════════════════════════════════════════════
+  let dropId = '';
+  let encryptionKey = '';   // base64 key (extracted from fragment or derived from password)
+  let passwordSalt = '';    // base64 salt (only for password-protected drops)
+  let isPasswordDrop = false;
+  let meta = null;
+  let wasmModule = null;
+
+  // ═══════════════════════════════════════════════════
+  // Init — extract fragment, load WASM, fetch metadata
+  // ═══════════════════════════════════════════════════
+  (async function init() {
+    // Extract drop ID from URL path: /d/{id}
+    const pathParts = window.location.pathname.split('/');
+    dropId = pathParts[pathParts.length - 1] || pathParts[pathParts.length - 2];
+
+    // Extract fragment (key or pw:salt)
+    const fragment = window.location.hash.slice(1);  // remove #
+
+    // Immediately clear fragment from URL bar and history
+    if (fragment) {
+      history.replaceState(null, '', window.location.pathname);
+    }
+
+    if (!fragment) {
+      showError('No decryption key found in URL. The link may be incomplete.');
+      return;
+    }
+
+    // Check if this is a password-protected drop
+    if (fragment.startsWith('pw:')) {
+      isPasswordDrop = true;
+      passwordSalt = fragment.slice(3);  // everything after "pw:"
+    } else {
+      isPasswordDrop = false;
+      encryptionKey = fragment;
+    }
+
+    // Load WASM module
+    try {
+      const wasmImport = await import('/wasm/deadrop_wasm.js');
+      await wasmImport.default();
+      wasmModule = wasmImport;
+    } catch (e) {
+      console.error('WASM load failed:', e);
+      showError('Failed to load decryption module.');
+      return;
+    }
+
+    // Fetch metadata
+    try {
+      const resp = await fetch(`/api/meta/${dropId}`);
+
+      if (resp.status === 410) {
+        // Burned
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('burned').style.display = 'block';
+        return;
+      }
+      if (resp.status === 404) {
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('notfound').style.display = 'block';
+        return;
+      }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+      meta = await resp.json();
+    } catch (e) {
+      console.error('Metadata fetch failed:', e);
+      showError('Failed to load drop metadata.');
+      return;
+    }
+
+    // Populate UI
+    document.getElementById('filename').textContent = meta.filename || '—';
+    document.getElementById('filesize').textContent = meta.size || '—';
+    document.getElementById('remaining').textContent = meta.downloads_remaining || '—';
+
+    // Format expiry
+    if (meta.expires_at) {
+      const exp = new Date(meta.expires_at);
+      const now = new Date();
+      const diffMs = exp - now;
+      if (diffMs <= 0) {
+        document.getElementById('expires').textContent = 'Expired';
+        document.getElementById('expires').style.color = 'var(--danger)';
+      } else {
+        const mins = Math.floor(diffMs / 60000);
+        const hrs = Math.floor(mins / 60);
+        if (hrs > 0) {
+          document.getElementById('expires').textContent = `${hrs}h ${mins % 60}m`;
+        } else {
+          document.getElementById('expires').textContent = `${mins}m`;
+        }
+      }
+    }
+
+    // Show main card
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('main').style.display = 'block';
+
+    // Set up password vs. direct download mode
+    if (isPasswordDrop) {
+      document.getElementById('pw-section').classList.add('active');
+      document.getElementById('btn-download').style.display = 'none';
+      document.getElementById('btn-unlock').style.display = 'block';
+
+      // Allow Enter key to trigger unlock
+      document.getElementById('pw-input').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') unlockAndDownload();
+      });
+    }
+
+    // Set up auto-expire watcher
+    if (meta.expires_at) {
+      setupExpiryWatcher(new Date(meta.expires_at));
+    }
+  })();
+
+  // ═══════════════════════════════════════════════════
+  // Password unlock — derive key via Argon2id in WASM
+  // ═══════════════════════════════════════════════════
+  async function unlockAndDownload() {
+    const password = document.getElementById('pw-input').value;
+    if (!password) {
+      showError('Please enter the password.');
+      return;
+    }
+
+    const btn = document.getElementById('btn-unlock');
+    const pwStatus = document.getElementById('pw-status');
+    btn.disabled = true;
+    btn.textContent = '🔄 Deriving key...';
+    pwStatus.className = 'status deriving active';
+
+    try {
+      // Call WASM Argon2id key derivation
+      encryptionKey = wasmModule.derive_key_from_password(password, passwordSalt);
+      pwStatus.style.display = 'none';
+
+      // Now proceed with download
+      await startDownload();
+    } catch (e) {
+      console.error('Key derivation failed:', e);
+      btn.disabled = false;
+      btn.textContent = '🔓 Unlock & Download';
+      showError('Key derivation failed: ' + e);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════
+  // Download & decrypt
+  // ═══════════════════════════════════════════════════
+  async function startDownload() {
+    if (!encryptionKey) {
+      showError('No encryption key available.');
+      return;
+    }
+
+    const btn = document.getElementById('btn-download');
+    const btnUnlock = document.getElementById('btn-unlock');
+    btn.disabled = true;
+    btnUnlock.disabled = true;
+
+    const progressSection = document.getElementById('progress-section');
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+    progressSection.classList.add('active');
+
+    try {
+      // Fetch encrypted blob
+      progressText.textContent = 'Downloading encrypted blob...';
+      const resp = await fetch(`/api/blob/${dropId}`);
+
+      if (!resp.ok) {
+        if (resp.status === 403) throw new Error('Access denied — download locked to another device.');
+        if (resp.status === 404) throw new Error('Drop not found or already destroyed.');
+        if (resp.status === 410) throw new Error('Drop already downloaded.');
+        throw new Error(`HTTP ${resp.status}`);
+      }
+
+      // Read with progress
+      const contentLength = parseInt(resp.headers.get('Content-Length') || '0');
+      const reader = resp.body.getReader();
+      const chunks = [];
+      let received = 0;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        if (contentLength > 0) {
+          const pct = Math.round((received / contentLength) * 100);
+          progressFill.style.width = pct + '%';
+          progressText.textContent = `Downloading... ${pct}% (${formatBytes(received)} / ${formatBytes(contentLength)})`;
+        }
+      }
+
+      // Combine chunks
+      const encrypted = new Uint8Array(received);
+      let offset = 0;
+      for (const chunk of chunks) {
+        encrypted.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      progressFill.style.width = '100%';
+      progressText.textContent = '🔓 Decrypting...';
+
+      // Decrypt using WASM
+      let decrypted;
+      try {
+        decrypted = wasmModule.decrypt_blob(encrypted, encryptionKey);
+      } catch (e) {
+        if (isPasswordDrop) {
+          throw new Error('Decryption failed — wrong password? The key didn\'t match.');
+        }
+        throw new Error('Decryption failed — key mismatch or corrupted data.');
+      }
+
+      // Trigger download
+      progressText.textContent = '💾 Saving file...';
+      const blob = new Blob([decrypted], { type: meta.mime || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = meta.filename || 'deadrop-file';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      // Success
+      showSuccess('✅ File decrypted and downloaded!');
+      progressSection.classList.remove('active');
+
+      // Nuke key from memory
+      encryptionKey = null;
+      passwordSalt = null;
+
+    } catch (e) {
+      console.error('Download failed:', e);
+      progressSection.classList.remove('active');
+
+      if (isPasswordDrop && e.message.includes('wrong password')) {
+        // Reset for retry
+        const btnRetry = document.getElementById('btn-unlock');
+        btnRetry.disabled = false;
+        btnRetry.textContent = '🔓 Unlock & Download';
+        encryptionKey = '';
+        document.getElementById('pw-input').value = '';
+        document.getElementById('pw-input').focus();
+      }
+      showError(e.message);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════
+  // Auto-expire: nuke key from memory when drop expires
+  // ═══════════════════════════════════════════════════
+  function setupExpiryWatcher(expiresAt) {
+    const check = () => {
+      if (new Date() >= expiresAt) {
+        encryptionKey = null;
+        passwordSalt = null;
+        document.getElementById('main').style.display = 'none';
+        document.getElementById('notfound').style.display = 'block';
+        document.querySelector('#notfound .burned-title').textContent = 'This drop has expired';
+        document.querySelector('#notfound .burned-sub').textContent = 'The encryption key has been wiped from memory.';
+      }
+    };
+    setInterval(check, 5000);
+  }
+
+  // ═══════════════════════════════════════════════════
+  // Helpers
+  // ═══════════════════════════════════════════════════
+  function showError(msg) {
+    const el = document.getElementById('status-msg');
+    el.className = 'status error active';
+    el.textContent = msg;
+  }
+
+  function showSuccess(msg) {
+    const el = document.getElementById('status-msg');
+    el.className = 'status success active';
+    el.textContent = msg;
+  }
+
+  function formatBytes(b) {
+    if (b < 1024) return b + ' B';
+    if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+    if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+    return (b / 1073741824).toFixed(2) + ' GB';
+  }
+</script>
 </body>
 </html>

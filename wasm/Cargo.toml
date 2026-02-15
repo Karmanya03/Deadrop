@@ -1,6 +1,6 @@
 [package]
 name = "deadrop-wasm"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2024"
 
 [lib]
@@ -8,13 +8,16 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 getrandom = { version = "0.4.1", features = ["wasm_js"] }
-getrandom_v02 = { package = "getrandom", version = "0.2", features = ["js"] }
 wasm-bindgen = "0.2"
 chacha20poly1305 = "0.10"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["console"] }
 base64 = "0.22"
+argon2 = "0.5"
 
-[profile.release]
-opt-level = "z"
-lto = true
+# argon2 pulls getrandom 0.2.x via password-hash → rand_core.
+# On wasm32-unknown-unknown, getrandom 0.2.x needs the "js" feature.
+[dependencies.getrandom_02]
+package = "getrandom"
+version = "0.2"
+features = ["js"]

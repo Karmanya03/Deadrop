@@ -20,7 +20,6 @@ pub fn compress_folder(
         .to_string();
 
     let archive_name = format!("{}.tar.gz", folder_name);
-
     progress.set_message(format!("Archiving {}...", folder_name));
 
     // Count total files for progress
@@ -30,7 +29,6 @@ pub fn compress_folder(
 
     // Create tar.gz in memory
     let mut compressed_bytes: Vec<u8> = Vec::new();
-
     {
         let encoder = GzEncoder::new(&mut compressed_bytes, Compression::fast());
         let mut tar_builder = tar::Builder::new(encoder);
@@ -54,6 +52,48 @@ pub fn compress_folder(
     ));
 
     Ok((compressed_bytes, archive_name))
+}
+
+/// Bundle multiple files and/or folders into a single .tar.gz on disk
+pub fn bundle_files(paths: &[PathBuf], output: &Path) -> anyhow::Result<()> {
+    let file = std::fs::File::create(output)?;
+    let enc = GzEncoder::new(file, Compression::fast());
+    let mut tar = tar::Builder::new(enc);
+    tar.follow_symlinks(false);
+
+    for path in paths {
+        if path.is_dir() {
+            let dir_name = path.file_name().unwrap_or_default();
+            add_dir_recursive(
+                &mut tar,
+                path,
+                Path::new(&dir_name),
+                &ProgressBar::hidden(),
+            )?;
+        } else if path.is_file() {
+            let file_name = path.file_name().unwrap_or_default();
+            let mut f = std::fs::File::open(path)?;
+            let metadata = f.metadata()?;
+            let mut header = tar::Header::new_gnu();
+            header.set_path(file_name)?;
+            header.set_size(metadata.len());
+            header.set_mode(0o644);
+            header.set_mtime(
+                metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            );
+            header.set_cksum();
+            tar.append(&header, &mut f)?;
+        }
+    }
+
+    let enc = tar.into_inner()?;
+    enc.finish()?;
+    Ok(())
 }
 
 /// Recursively add directory contents to tar archive
@@ -89,7 +129,6 @@ fn add_dir_recursive<W: Write>(
                     .unwrap_or(0),
             );
             header.set_cksum();
-
             builder.append(&header, &mut file)?;
             progress.inc(1);
         } else if file_type.is_dir() {
@@ -105,7 +144,6 @@ fn add_dir_recursive<W: Write>(
             header.set_mode(0o755);
             header.set_entry_type(tar::EntryType::Directory);
             header.set_cksum();
-
             builder.append(&header, &mut std::io::empty())?;
 
             // Recurse

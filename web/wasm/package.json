@@ -1,7 +1,7 @@
 {
   "name": "deadrop-wasm",
   "type": "module",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "files": [
     "deadrop_wasm_bg.wasm",
     "deadrop_wasm.js"

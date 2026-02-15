@@ -1,3 +1,5 @@
+use base64::Engine;
+
 use axum::{
     Router,
     body::Body,
@@ -15,16 +17,12 @@ use tokio_util::io::ReaderStream;
 use axum::middleware;
 use axum::http::HeaderValue;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
-use axum_server::tls_rustls::RustlsConfig;
-use rcgen::{generate_simple_self_signed, CertifiedKey};
 use crate::{config::{DropConfig, ReceiveConfig}, crypto, progress, store::BlobStore};
 
-// Embed web assets into the binary at compile time
 #[derive(Embed)]
 #[folder = "web/"]
 struct WebAssets;
 
-// Also embed the top-level assets/ folder (images, etc.)
 #[derive(Embed)]
 #[folder = "assets/"]
 struct StaticAssets;
@@ -34,7 +32,6 @@ pub struct AppState {
     pub shutdown: Arc<Notify>,
 }
 
-/// State for receive mode
 pub struct ReceiveState {
     pub key: crypto::EncryptionKey,
     pub output_dir: std::path::PathBuf,
@@ -42,30 +39,7 @@ pub struct ReceiveState {
     pub received: std::sync::atomic::AtomicBool,
 }
 
-/// Threshold: files larger than 50MB use disk-backed streaming
 const DISK_THRESHOLD: u64 = 50 * 1024 * 1024;
-
-// ─── Self-signed TLS cert helper ─────────────────────────────────────────────
-
-async fn generate_tls_config(local_ip: &std::net::IpAddr) -> anyhow::Result<RustlsConfig> {
-    let san = vec![
-        local_ip.to_string(),
-        "localhost".to_string(),
-        "127.0.0.1".to_string(),
-    ];
-    let CertifiedKey { cert, key_pair } = generate_simple_self_signed(san)
-        .expect("failed to generate self-signed cert");
-
-    let tls_config = RustlsConfig::from_pem(
-        cert.pem().into(),
-        key_pair.serialize_pem().into(),
-    )
-    .await?;
-
-    Ok(tls_config)
-}
-
-// ─── Security headers middleware ─────────────────────────────────────────────
 
 async fn security_headers(
     request: axum::extract::Request,
@@ -73,50 +47,60 @@ async fn security_headers(
 ) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    // Prevent iframe embedding (clickjacking)
     headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
-    // Prevent MIME-type sniffing
     headers.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
-    // Don't leak URL to other sites via Referer header
     headers.insert("Referrer-Policy", HeaderValue::from_static("no-referrer"));
-    // Block unnecessary browser permissions
     headers.insert(
         "Permissions-Policy",
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
-    // CSP: only allow own origin + WASM execution
     headers.insert(
         "Content-Security-Policy",
         HeaderValue::from_static(
             "default-src 'self'; \
-             script-src 'self' 'wasm-unsafe-eval'; \
-             style-src 'self' 'unsafe-inline'; \
-             img-src 'self' data:; \
-             connect-src 'self'; \
-             frame-ancestors 'none';"
+            script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
+            style-src 'self' 'unsafe-inline'; \
+            img-src 'self' data:; \
+            connect-src 'self'; \
+            frame-ancestors 'none';"
         ),
     );
-    // Prevent caching of any response
     headers.insert("Cache-Control", HeaderValue::from_static("no-store, no-cache, must-revalidate"));
     headers.insert("Pragma", HeaderValue::from_static("no-cache"));
     response
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SEND MODE (existing — `ded ./file` or `ded send ./file`)
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
+// FAVICON
+// ===============================================================================
 
-pub async fn start(config: DropConfig) -> anyhow::Result<()> {
+async fn serve_favicon() -> Response {
+    match StaticAssets::get("favicon.ico") {
+        Some(content) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "image/x-icon")],
+            content.data.to_vec(),
+        ).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    }
+}
+
+// ===============================================================================
+// SEND MODE
+// ===============================================================================
+
+pub async fn start(
+    config: DropConfig,
+    tor_service: Option<&crate::tor::TorHiddenService>,
+) -> anyhow::Result<()> {
     let shutdown = Arc::new(Notify::new());
     let shutdown_clone = shutdown.clone();
-
-    // Setup blob store with expiry callback
     let store = BlobStore::new(move || {
         progress::print_expired();
     });
     store.spawn_reaper();
 
-    // --- Generate encryption key ---
+    // Generate encryption key (or derive from password)
     let (key, password_salt) = match &config.password {
         Some(pw) => {
             let mut salt = [0u8; 16];
@@ -127,7 +111,7 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         None => (crypto::EncryptionKey::generate(), None),
     };
 
-    // --- Prepare file or folder ---
+    // Prepare file or folder
     let file_size: u64;
     let filename: String;
     let encrypted_path: Option<std::path::PathBuf>;
@@ -135,7 +119,6 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
     let encrypted_size: u64;
 
     if config.file.is_dir() {
-        // FOLDER MODE: compress to .tar.gz first, then encrypt
         let pm = progress::ProgressManager::new();
         let archive_bar = pm.create_encrypt_bar(0);
         archive_bar.set_style(
@@ -150,7 +133,6 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
             &config.file,
             &archive_bar,
         )?;
-
         file_size = archive_bytes.len() as u64;
         filename = archive_name;
 
@@ -160,9 +142,7 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         if file_size > DISK_THRESHOLD {
             let mut cursor = std::io::Cursor::new(&archive_bytes);
             let info = crypto::encrypt_file_to_disk(
-                &mut cursor,
-                &key,
-                file_size,
+                &mut cursor, &key, file_size,
                 |bytes| encrypt_bar.set_position(bytes),
             )?;
             encrypted_size = info.total_size;
@@ -171,9 +151,7 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         } else {
             let mut cursor = std::io::Cursor::new(&archive_bytes);
             let ct = crypto::encrypt_file_streaming(
-                &mut cursor,
-                &key,
-                file_size,
+                &mut cursor, &key, file_size,
                 |bytes| encrypt_bar.set_position(bytes),
             )?;
             encrypted_size = ct.len() as u64;
@@ -182,7 +160,6 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         }
         encrypt_bar.finish_and_clear();
     } else {
-        // FILE MODE
         file_size = std::fs::metadata(&config.file)?.len();
         filename = config.file.file_name().unwrap().to_string_lossy().to_string();
 
@@ -192,9 +169,7 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         if file_size > DISK_THRESHOLD {
             let mut file = std::fs::File::open(&config.file)?;
             let info = crypto::encrypt_file_to_disk(
-                &mut file,
-                &key,
-                file_size,
+                &mut file, &key, file_size,
                 |bytes| encrypt_bar.set_position(bytes),
             )?;
             encrypted_size = info.total_size;
@@ -203,9 +178,7 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         } else {
             let mut file = std::fs::File::open(&config.file)?;
             let ct = crypto::encrypt_file_streaming(
-                &mut file,
-                &key,
-                file_size,
+                &mut file, &key, file_size,
                 |bytes| encrypt_bar.set_position(bytes),
             )?;
             encrypted_size = ct.len() as u64;
@@ -219,7 +192,6 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         .first_or_octet_stream()
         .to_string();
 
-    // Generate 16-char drop ID (64-bit entropy — brute-force infeasible)
     let drop_id = format!(
         "{}{}",
         uuid::Uuid::new_v4().simple().to_string()[..8].to_string(),
@@ -241,7 +213,6 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         has_password: password_salt.is_some(),
         pinned_ip: std::sync::Mutex::new(None),
     };
-
     store.insert(drop);
 
     let state = Arc::new(AppState {
@@ -249,7 +220,6 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         shutdown: shutdown_clone,
     });
 
-    // ─── Rate limiter: 2 req/sec per IP, burst of 5 ───
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(2)
@@ -258,7 +228,6 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
             .unwrap(),
     );
 
-    // Build router — rate-limit only API/page routes, not static assets
     let rate_limited = Router::new()
         .route("/d/{id}", get(serve_download_page))
         .route("/api/blob/{id}", get(serve_blob))
@@ -268,26 +237,29 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
     let app = rate_limited
         .route("/assets/{*path}", get(serve_web_asset))
         .route("/wasm/{*path}", get(serve_wasm_asset))
+        .route("/favicon.ico", get(serve_favicon))
         .layer(middleware::from_fn(security_headers))
         .with_state(state.clone());
 
-    // Determine URL
-    let key_fragment = key.to_url_safe();
+    // Password drops: put salt in fragment. Normal drops: put key in fragment.
+    let key_fragment = match &password_salt {
+        Some(salt) => {
+            let salt_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(salt);
+            format!("pw:{}", salt_b64)
+        }
+        None => key.to_url_safe(),
+    };
+
     let local_ip = local_ip_address::local_ip().unwrap_or("127.0.0.1".parse().unwrap());
-
-    // --- Generate self-signed TLS cert ---
-    let tls_config = generate_tls_config(&local_ip).await?;
-
     let url = format!(
-        "https://{}:{}/d/{}#{}",
+        "http://{}:{}/d/{}#{}",
         local_ip, config.port, drop_id, key_fragment
     );
     let localhost_url = format!(
-        "https://localhost:{}/d/{}#{}",
+        "http://localhost:{}/d/{}#{}",
         config.port, drop_id, key_fragment
     );
 
-    // Print banner
     progress::print_banner(
         &url,
         &config.expire,
@@ -297,7 +269,16 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         config.password.is_some(),
     );
 
-    // Print QR code
+    if let Some(tor) = tor_service {
+        let onion_url = tor.onion_url(&format!("/d/{}", drop_id), &key_fragment);
+        eprintln!(
+            " {} Tor: {}",
+            console::style("🧅").bold(),
+            console::style(&onion_url).green()
+        );
+        eprintln!();
+    }
+
     if !config.no_qr {
         crate::qr::print_qr(&url);
     }
@@ -308,61 +289,51 @@ pub async fn start(config: DropConfig) -> anyhow::Result<()> {
         console::style(&localhost_url).dim()
     );
     eprintln!(
-        " {} Self-signed TLS — browser will show a warning (safe to proceed)",
-        console::style("🔒").yellow(),
-    );
-    eprintln!(
         " {} Waiting for downloads... (Ctrl+C to abort)",
         console::style("⏳").dim()
     );
     eprintln!();
 
-    // Start HTTPS server with graceful shutdown
-   let addr: SocketAddr = format!("{}:{}", config.bind, config.port).parse()?;
-    let handle = axum_server::Handle::new();
-
-    // Spawn shutdown listener
-    let handle_clone = handle.clone();
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", config.bind, config.port)).await?;
     let shutdown_signal = shutdown.clone();
-    tokio::spawn(async move {
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
         tokio::select! {
             _ = shutdown_signal.notified() => {},
             _ = tokio::signal::ctrl_c() => {
                 eprintln!("\n {} Shutting down...", console::style("🛑").bold());
             }
         }
-        handle_clone.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
-    });
-
-    axum_server::bind_rustls(addr, tls_config)
-        .handle(handle)
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await?;
+    })
+    .await?;
 
     Ok(())
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// RECEIVE MODE (new — `ded receive`)
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
+// RECEIVE MODE
+// ===============================================================================
 
-pub async fn start_receive(config: ReceiveConfig) -> anyhow::Result<()> {
+pub async fn start_receive(
+    config: ReceiveConfig,
+    tor_service: Option<&crate::tor::TorHiddenService>,
+) -> anyhow::Result<()> {
     let shutdown = Arc::new(Notify::new());
-
-    // Generate encryption key — receiver (PC) creates it, shares via QR/URL fragment
     let key = crypto::EncryptionKey::generate();
 
-    // Ensure output directory exists
     std::fs::create_dir_all(&config.output_dir)?;
 
     let state = Arc::new(ReceiveState {
-        key: crypto::EncryptionKey(key.0), // clone the key bytes for state
+        key: crypto::EncryptionKey(key.0),
         output_dir: config.output_dir.clone(),
         shutdown: shutdown.clone(),
         received: std::sync::atomic::AtomicBool::new(false),
     });
 
-    // ─── Rate limiter for upload endpoint ───
     let governor_conf = Arc::new(
         GovernorConfigBuilder::default()
             .per_second(2)
@@ -371,7 +342,6 @@ pub async fn start_receive(config: ReceiveConfig) -> anyhow::Result<()> {
             .unwrap(),
     );
 
-    // Build receive-mode router
     let rate_limited = Router::new()
         .route("/api/upload", post(receive_upload))
         .layer(GovernorLayer::new(governor_conf));
@@ -380,29 +350,27 @@ pub async fn start_receive(config: ReceiveConfig) -> anyhow::Result<()> {
         .route("/", get(serve_upload_page))
         .route("/assets/{*path}", get(serve_web_asset_receive))
         .route("/wasm/{*path}", get(serve_wasm_asset))
+        .route("/favicon.ico", get(serve_favicon))
         .layer(middleware::from_fn(security_headers))
         .with_state(state.clone());
 
-    // Determine URL with key fragment
     let key_fragment = key.to_url_safe();
     let local_ip = local_ip_address::local_ip().unwrap_or("127.0.0.1".parse().unwrap());
+    let url = format!("http://{}:{}/#{}", local_ip, config.port, key_fragment);
+    let localhost_url = format!("http://localhost:{}/#{}", config.port, key_fragment);
 
-    // --- Generate self-signed TLS cert ---
-    let tls_config = generate_tls_config(&local_ip).await?;
-
-    let url = format!(
-        "https://{}:{}/#{}", 
-        local_ip, config.port, key_fragment
-    );
-    let localhost_url = format!(
-        "https://localhost:{}/#{}", 
-        config.port, key_fragment
-    );
-
-    // Print receive banner
     print_receive_banner(&url, &config.output_dir);
 
-    // Print QR code
+    if let Some(tor) = tor_service {
+        let onion_url = tor.onion_url("/", &key_fragment);
+        eprintln!(
+            " {} Tor: {}",
+            console::style("🧅").bold(),
+            console::style(&onion_url).green()
+        );
+        eprintln!();
+    }
+
     if !config.no_qr {
         crate::qr::print_qr(&url);
     }
@@ -413,36 +381,27 @@ pub async fn start_receive(config: ReceiveConfig) -> anyhow::Result<()> {
         console::style(&localhost_url).dim()
     );
     eprintln!(
-        " {} Self-signed TLS — browser will show a warning (safe to proceed)",
-        console::style("🔒").yellow(),
-    );
-    eprintln!(
         " {} Waiting for upload... (Ctrl+C to abort)",
         console::style("⏳").dim()
     );
     eprintln!();
 
-    // Start HTTPS server
-    let addr: SocketAddr = format!("{}:{}", config.bind, config.port).parse()?;
-    let handle = axum_server::Handle::new();
-
-    // Spawn shutdown listener
-    let handle_clone = handle.clone();
+    let listener =
+        tokio::net::TcpListener::bind(format!("{}:{}", config.bind, config.port)).await?;
     let shutdown_signal = shutdown.clone();
-    tokio::spawn(async move {
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
         tokio::select! {
             _ = shutdown_signal.notified() => {},
             _ = tokio::signal::ctrl_c() => {
                 eprintln!("\n {} Shutting down...", console::style("🛑").bold());
             }
         }
-        handle_clone.graceful_shutdown(Some(std::time::Duration::from_secs(5)));
-    });
-
-    axum_server::bind_rustls(addr, tls_config)
-        .handle(handle)
-        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
-        .await?;
+    })
+    .await?;
 
     Ok(())
 }
@@ -480,9 +439,6 @@ fn print_receive_banner(url: &str, output_dir: &std::path::Path) {
     eprintln!();
 }
 
-// ─── Receive mode handlers ───────────────────────────────────────────────────
-
-/// Serve the upload page
 async fn serve_upload_page() -> impl IntoResponse {
     match WebAssets::get("upload.html") {
         Some(content) => {
@@ -492,13 +448,11 @@ async fn serve_upload_page() -> impl IntoResponse {
     }
 }
 
-/// Receive encrypted upload from browser, decrypt with server key, save to disk
 async fn receive_upload(
     State(state): State<Arc<ReceiveState>>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    // Only allow one upload
     if state.received.load(std::sync::atomic::Ordering::SeqCst) {
         return (
             StatusCode::GONE,
@@ -506,7 +460,6 @@ async fn receive_upload(
         ).into_response();
     }
 
-    // Extract metadata from headers
     let filename = headers
         .get("X-Filename")
         .and_then(|v| v.to_str().ok())
@@ -514,7 +467,6 @@ async fn receive_upload(
         .map(|v| v.to_string())
         .unwrap_or_else(|| "received_file".to_string());
 
-    // Sanitize filename — prevent path traversal
     let safe_filename: String = filename
         .replace("..", "")
         .replace('/', "")
@@ -533,16 +485,13 @@ async fn receive_upload(
         body.len()
     );
 
-    // Decrypt the blob using the server's key
-    let _key_base64 = state.key.to_url_safe();
-
-    // Use the same decrypt logic as the WASM/server crypto module
     match decrypt_uploaded_blob(&body, &state.key) {
         Ok(plaintext) => {
             let output_path = state.output_dir.join(&safe_filename);
             match std::fs::write(&output_path, &plaintext) {
                 Ok(_) => {
                     state.received.store(true, std::sync::atomic::Ordering::SeqCst);
+
                     eprintln!(
                         " {} Saved: {} ({})",
                         console::style("✅").bold(),
@@ -555,7 +504,6 @@ async fn receive_upload(
                         console::style(output_path.display()).green()
                     );
 
-                    // Schedule shutdown
                     let shutdown = state.shutdown.clone();
                     tokio::spawn(async move {
                         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
@@ -573,33 +521,18 @@ async fn receive_upload(
                     })).into_response()
                 }
                 Err(e) => {
-                    eprintln!(
-                        " {} Failed to save file: {}",
-                        console::style("❌").bold(),
-                        e
-                    );
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        format!("Failed to save: {}", e),
-                    ).into_response()
+                    eprintln!(" {} Failed to save file: {}", console::style("❌").bold(), e);
+                    (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save: {}", e)).into_response()
                 }
             }
         }
         Err(e) => {
-            eprintln!(
-                " {} Decryption failed: {}",
-                console::style("❌").bold(),
-                e
-            );
-            (
-                StatusCode::BAD_REQUEST,
-                format!("Decryption failed: {}", e),
-            ).into_response()
+            eprintln!(" {} Decryption failed: {}", console::style("❌").bold(), e);
+            (StatusCode::BAD_REQUEST, format!("Decryption failed: {}", e)).into_response()
         }
     }
 }
 
-/// Decrypt an uploaded blob (same format as crypto module: [header][chunks])
 fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Result<Vec<u8>> {
     use chacha20poly1305::{aead::{Aead, KeyInit}, XChaCha20Poly1305};
 
@@ -624,7 +557,6 @@ fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Re
         if offset + 4 > chunk_data.len() {
             anyhow::bail!("Truncated chunk length at chunk {}", chunk_index);
         }
-
         let chunk_len = u32::from_le_bytes(
             chunk_data[offset..offset + 4].try_into()?
         ) as usize;
@@ -633,11 +565,9 @@ fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Re
         if offset + chunk_len > chunk_data.len() {
             anyhow::bail!("Truncated chunk data at chunk {}", chunk_index);
         }
-
         let encrypted_chunk = &chunk_data[offset..offset + chunk_len];
         offset += chunk_len;
 
-        // Derive per-chunk nonce: base XOR chunk_index
         let mut chunk_nonce = nonce_bytes;
         let idx_bytes = chunk_index.to_le_bytes();
         for i in 0..8 {
@@ -649,43 +579,32 @@ fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Re
             .map_err(|_| anyhow::anyhow!(
                 "Decryption failed at chunk {} — wrong key or corrupted", chunk_index
             ))?;
-
         plaintext.extend_from_slice(&decrypted);
     }
 
     Ok(plaintext)
 }
 
-/// Serve web assets in receive mode (shares the same handler)
 async fn serve_web_asset_receive(Path(path): Path<String>) -> Response {
     match WebAssets::get(&path) {
         Some(content) => {
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, mime.as_ref())],
-                content.data.to_vec(),
-            ).into_response()
+            (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.to_vec()).into_response()
         }
         None => match StaticAssets::get(&path) {
             Some(content) => {
                 let mime = mime_guess::from_path(&path).first_or_octet_stream();
-                (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, mime.as_ref())],
-                    content.data.to_vec(),
-                ).into_response()
+                (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.to_vec()).into_response()
             }
             None => StatusCode::NOT_FOUND.into_response(),
         },
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SEND MODE HANDLERS (existing)
-// ═══════════════════════════════════════════════════════════════════════════════
+// ===============================================================================
+// SEND MODE HANDLERS
+// ===============================================================================
 
-/// Serve the download HTML page (embedded in binary)
 async fn serve_download_page() -> impl IntoResponse {
     match WebAssets::get("index.html") {
         Some(content) => {
@@ -695,42 +614,37 @@ async fn serve_download_page() -> impl IntoResponse {
     }
 }
 
-/// Serve encrypted blob — streams from disk for large files, in-memory for small
 async fn serve_blob(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
 ) -> Response {
     let Some(drop) = state.store.get(&id) else {
-        // Constant-time 404: random delay prevents timing-based ID enumeration
         let delay = 50 + rand::random::<u64>() % 150;
         tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
         return (StatusCode::NOT_FOUND, "Drop not found or already destroyed").into_response();
     };
 
-    // ── IP pinning: lock download to first IP that connects ──
+    // Scope the MutexGuard so it drops before any .await below
     {
         let mut pinned = drop.pinned_ip.lock().unwrap();
         let client_ip = addr.ip().to_string();
         match pinned.as_ref() {
-            None => *pinned = Some(client_ip), // First request — pin this IP
-            Some(ip) if ip == &client_ip => {} // Same IP — allowed
+            None => *pinned = Some(client_ip),
+            Some(ip) if ip == &client_ip => {}
             Some(_) => {
                 eprintln!(
                     " {} Blocked download attempt from {} (pinned to different IP)",
-                    console::style("🛡").red(),
-                    addr
+                    console::style("🛡").red(), addr
                 );
                 return (
                     StatusCode::FORBIDDEN,
                     "Access denied — this drop is locked to another device",
-                )
-                .into_response();
+                ).into_response();
             }
         }
     }
 
-    // Record download
     let Some((count, should_delete)) = state.store.record_download(&id) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -738,27 +652,16 @@ async fn serve_blob(
     progress::print_download_event(count, drop.max_downloads, &addr.to_string());
 
     let encrypted_size = drop.encrypted_size;
-
-    // Build response body depending on storage mode
     let body = if let Some(ref path) = drop.encrypted_path {
-        // DISK MODE: stream from temp file (constant memory)
         match tokio::fs::File::open(path).await {
-            Ok(file) => {
-                let stream = ReaderStream::new(file);
-                Body::from_stream(stream)
-            }
+            Ok(file) => Body::from_stream(ReaderStream::new(file)),
             Err(e) => {
-                eprintln!(
-                    " {} Failed to open encrypted file {}: {}",
-                    console::style("⚠").yellow(),
-                    path.display(),
-                    e
-                );
+                eprintln!(" {} Failed to open encrypted file {}: {}",
+                    console::style("⚠").yellow(), path.display(), e);
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         }
     } else if let Some(ref data) = drop.ciphertext {
-        // MEMORY MODE: serve from Vec
         Body::from(data.clone())
     } else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -769,7 +672,6 @@ async fn serve_blob(
         let shutdown = state.shutdown.clone();
         let id_clone = id.clone();
         tokio::spawn(async move {
-            // Delay to let the stream finish sending
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             store.remove(&id_clone);
             progress::print_self_destruct();
@@ -787,24 +689,19 @@ async fn serve_blob(
             (header::CONTENT_LENGTH, &encrypted_size.to_string()),
         ],
         body,
-    )
-    .into_response()
+    ).into_response()
 }
 
-/// Serve metadata (filename, size, mime) — no sensitive data
 async fn serve_meta(Path(id): Path<String>, State(state): State<Arc<AppState>>) -> Response {
-    // Check if this drop was already consumed (burned)
     if state.store.is_burned(&id) {
         return (
             StatusCode::GONE,
             [(header::CONTENT_TYPE, "application/json")],
             r#"{"burned":true}"#,
-        )
-        .into_response();
+        ).into_response();
     }
 
     let Some(drop) = state.store.get(&id) else {
-        // Constant-time 404: random delay prevents timing-based ID enumeration
         let delay = 50 + rand::random::<u64>() % 150;
         tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
         return (StatusCode::NOT_FOUND, "{}").into_response();
@@ -831,55 +728,35 @@ async fn serve_meta(Path(id): Path<String>, State(state): State<Arc<AppState>>) 
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
         serde_json::to_string(&meta).unwrap(),
-    )
-    .into_response()
+    ).into_response()
 }
 
-/// Serve embedded web assets (CSS, etc.)
 async fn serve_web_asset(Path(path): Path<String>) -> Response {
-    // Try the web/ embedded assets first, then fall back to assets/ folder
     match WebAssets::get(&path) {
         Some(content) => {
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, mime.as_ref())],
-                content.data.to_vec(),
-            )
-            .into_response()
+            (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.to_vec()).into_response()
         }
         None => match StaticAssets::get(&path) {
             Some(content) => {
                 let mime = mime_guess::from_path(&path).first_or_octet_stream();
-                (
-                    StatusCode::OK,
-                    [(header::CONTENT_TYPE, mime.as_ref())],
-                    content.data.to_vec(),
-                )
-                .into_response()
+                (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.to_vec()).into_response()
             }
             None => StatusCode::NOT_FOUND.into_response(),
         },
     }
 }
 
-/// Serve WASM assets
 async fn serve_wasm_asset(Path(path): Path<String>) -> Response {
     let full_path = format!("wasm/{}", path);
     serve_embedded::<WebAssets>(&full_path)
 }
 
-/// Helper to serve embedded files with correct MIME type
-fn serve_embedded<T: Embed>(path: &str) -> Response {
+fn serve_embedded<T: rust_embed::Embed>(path: &str) -> Response {
     match T::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, mime.as_ref())],
-                content.data.to_vec(),
-            )
-            .into_response()
+            (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.to_vec()).into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }

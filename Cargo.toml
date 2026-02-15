@@ -1,6 +1,6 @@
 [package]
 name = "deadrop"
-version = "0.1.4"
+version = "0.2.0"
 edition = "2024"
 description = "Zero-knowledge encrypted dead drop. One binary. One command. Gone."
 license = "MIT"
@@ -32,8 +32,6 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "limit", "compression-full", "set-header"] }
 tower_governor = { version = "0.8", features = ["axum"] }
 
-axum-server = { version = "0.7", features = ["tls-rustls"] }
-rcgen = "0.13"
 
 # Crypto
 chacha20poly1305 = "0.10"

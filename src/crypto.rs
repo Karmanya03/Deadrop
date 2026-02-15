@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 use chacha20poly1305::{
     XChaCha20Poly1305,
     aead::{Aead, KeyInit},
@@ -44,15 +46,23 @@ impl EncryptionKey {
     }
 
     /// Derive key from password using Argon2id (memory-hard, GPU-resistant)
+    ///
+    /// Params: Argon2id v0x13, m=65536 (64 MB), t=3, p=1, output=32 bytes
+    ///
+    /// ⚠️  p=1 (not p=4) because the browser-side WASM runs single-threaded.
+    ///     Both sides MUST use identical params or decryption will fail.
     pub fn from_password(password: &str, salt: &[u8; 16]) -> anyhow::Result<Self> {
         use argon2::{Algorithm, Argon2, Params, Version};
-        let params = Params::new(65536, 3, 4, Some(32))
+
+        let params = Params::new(65536, 3, 1, Some(32))
             .map_err(|e| anyhow::anyhow!("Argon2 params error: {}", e))?;
         let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+
         let mut key = [0u8; 32];
         argon2
             .hash_password_into(password.as_bytes(), salt, &mut key)
             .map_err(|e| anyhow::anyhow!("Argon2 hash error: {}", e))?;
+
         let k = Self(key);
         k.lock_memory();
         Ok(k)
@@ -156,6 +166,7 @@ pub fn encrypt_file_to_disk(
 ) -> anyhow::Result<EncryptedFileInfo> {
     let cipher = XChaCha20Poly1305::new_from_slice(&key.0)
         .map_err(|e| anyhow::anyhow!("Cipher init error: {}", e))?;
+
     let mut nonce_bytes = [0u8; 24];
     rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = *chachapoly1305_nonce_from_slice(&nonce_bytes);
@@ -226,6 +237,7 @@ pub fn encrypt_file_streaming(
 ) -> anyhow::Result<Vec<u8>> {
     let cipher = XChaCha20Poly1305::new_from_slice(&key.0)
         .map_err(|e| anyhow::anyhow!("Cipher init error: {}", e))?;
+
     let mut nonce_bytes = [0u8; 24];
     rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = *chachapoly1305_nonce_from_slice(&nonce_bytes);
