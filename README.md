@@ -650,6 +650,6 @@ MIT — do whatever you want. Just don't blame me if your dead drop gets interce
 ---
 
 <p align="center">
-  <sub>Built with Rust and an unreasonable amount of paranoia.</sub><br/>
+  <sub>Built with Rust 🦀 and an unreasonable amount of paranoia.</sub><br/>
   <sub>Remember: just because you're paranoid doesn't mean they're not after your files.</sub>
 </p>
