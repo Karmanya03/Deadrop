@@ -118,7 +118,13 @@ This is that, but for files. Except the briefcase is encrypted with military-gra
 curl -fsSL https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.sh | bash
 ```
 
-Detects your OS and architecture automatically, downloads the right binary, and adds it to your PATH.
+### One-line install (Windows PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.ps1 | iex
+```
+
+Both scripts detect your platform automatically, download the right binary, rename it to `ded`, and add it to your PATH.
 
 ### Download a binary
 
@@ -165,6 +171,9 @@ cargo build --release
 # Linux/macOS — same as install, overwrites the old binary
 curl -fsSL https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.sh | bash
 
+# Windows PowerShell — same as install, overwrites the old binary
+irm https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.ps1 | iex
+
 # Via cargo
 cargo install deadrop --force
 ```
@@ -172,11 +181,14 @@ cargo install deadrop --force
 ### Uninstall
 
 ```bash
-# If installed via script
+# If installed via script (Linux/macOS)
 rm -f ~/.local/bin/ded
 
 # If installed to /usr/local/bin/
 sudo rm -f /usr/local/bin/ded
+
+# If installed via script (Windows PowerShell)
+Remove-Item "$env:USERPROFILE\.local\bin\ded.exe" -Force
 
 # If installed via cargo
 cargo uninstall deadrop
@@ -650,6 +662,6 @@ MIT — do whatever you want. Just don't blame me if your dead drop gets interce
 ---
 
 <p align="center">
-  <sub>Built with Rust 🦀 and an unreasonable amount of paranoia.</sub><br/>
+  <sub>Built with Rust and an unreasonable amount of paranoia.</sub><br/>
   <sub>Remember: just because you're paranoid doesn't mean they're not after your files.</sub>
 </p>
