@@ -31,7 +31,7 @@
 
 Remember in spy movies when someone leaves a briefcase under a park bench, and someone else picks it up later? That's a dead drop.
 
-This is that, but for files. Except the briefcase is encrypted with military-grade cryptography, the park bench self-destructs after pickup, nobody — not even the bench — knows what's inside, the bench can hide on the dark web, AND it now has a Cloudflare-powered tunnel so anyone on the internet can pick it up without you port-forwarding like it's 2003.
+This is that, but for files. Except the briefcase is encrypted with military-grade cryptography, the park bench self-destructs after pickup, nobody - not even the bench - knows what's inside, the bench can hide on the dark web, AND it now has a Cloudflare-powered tunnel so anyone on the internet can pick it up without you port-forwarding like it's 2003.
 
 ### How a drop works
 
@@ -72,20 +72,20 @@ This is that, but for files. Except the briefcase is encrypted with military-gra
 
 | Feature | What it does |
 |---|---|
-| **End-to-end encrypted** | XChaCha20-Poly1305. The server is a blind courier — it couldn't read your file even if you asked nicely. |
+| **End-to-end encrypted** | XChaCha20-Poly1305. The server is a blind courier - it couldn't read your file even if you asked nicely. |
 | **Key in URL fragment** | The `#key` part never hits server logs, proxies, or HTTP headers. HTTP spec says so. Fight the spec, not us. |
 | **Self-destruct** | Expire by time, download count, or both. This message will self-destruct in... you get it. |
 | **Cloudflare tunnel** | Auto-creates a public `trycloudflare.com` URL. No port forwarding, no static IP, no DNS fiddling. Just works. |
 | **WebSocket P2P transfer** | Browser downloads via WebSocket for faster, streamed delivery. If P2P fails, HTTP kicks in. You won't even notice. |
 | **Works on phones** | Receiver needs a browser. That's it. No app, no account, no "sign up with your firstborn." |
 | **Send folders** | Directories auto-pack to `.tar.gz`. Your entire `homework/` folder, encrypted. We won't ask what's in it. |
-| **Multi-file drops** | `ded file1.txt file2.pdf photos/` — bundles everything into one encrypted drop. |
-| **Stdin / clipboard** | `echo "secret" \| ded -` — pipe anything. Your terminal is the dead drop. |
-| **Unlimited file size** | Streams from disk — your 50GB file won't eat your RAM for breakfast. |
+| **Multi-file drops** | `ded file1.txt file2.pdf photos/` - bundles everything into one encrypted drop. |
+| **Stdin / clipboard** | `echo "secret" \| ded -` - pipe anything. Your terminal is the dead drop. |
+| **Unlimited file size** | Streams from disk - your 50GB file won't eat your RAM for breakfast. |
 | **Password protection** | Argon2id key derivation (64MB memory-hard, GPU-resistant). Receiver gets a password prompt in-browser, key derived client-side. Server never sees the password OR the key. |
 | **QR code** | Because typing URLs is for people who still use fax machines. |
-| **Receive mode** | `ded receive` — phone-to-PC uploads. Your phone becomes the dead drop. |
-| **Tor hidden service** | `--tor` — spins up a `.onion` address. For when Cloudflare isn't paranoid enough. |
+| **Receive mode** | `ded receive` - phone-to-PC uploads. Your phone becomes the dead drop. |
+| **Tor hidden service** | `--tor` - spins up a `.onion` address. For when Cloudflare isn't paranoid enough. |
 | **Single binary** | No runtime, no Docker, no config files. One executable. Runs anywhere Rust compiles (so, everywhere). |
 
 ### Security Hardening
