@@ -1,3 +1,5 @@
+use futures_util::sink::SinkExt;
+
 use base64::Engine;
 
 use axum::{
@@ -9,6 +11,7 @@ use axum::{
     routing::{get, post},
     Json,
 };
+use axum::extract::ws::{WebSocketUpgrade, WebSocket, Message};
 use rust_embed::Embed;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -58,11 +61,11 @@ async fn security_headers(
         "Content-Security-Policy",
         HeaderValue::from_static(
             "default-src 'self'; \
-            script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
-            style-src 'self' 'unsafe-inline'; \
-            img-src 'self' data:; \
-            connect-src 'self'; \
-            frame-ancestors 'none';"
+             script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
+             style-src 'self' 'unsafe-inline'; \
+             img-src 'self' data:; \
+             connect-src 'self'; \
+             frame-ancestors 'none';"
         ),
     );
     headers.insert("Cache-Control", HeaderValue::from_static("no-store, no-cache, must-revalidate"));
@@ -73,7 +76,6 @@ async fn security_headers(
 // ===============================================================================
 // FAVICON
 // ===============================================================================
-
 async fn serve_favicon() -> Response {
     match StaticAssets::get("favicon.ico") {
         Some(content) => (
@@ -86,12 +88,39 @@ async fn serve_favicon() -> Response {
 }
 
 // ===============================================================================
+// TUNNEL-AWARE IP RESOLUTION
+// ===============================================================================
+
+/// Resolve the real client IP. When behind Cloudflare tunnel, ConnectInfo
+/// always shows 127.0.0.1 — use CF-Connecting-IP or X-Forwarded-For instead.
+fn resolve_client_ip(addr: &SocketAddr, headers: &HeaderMap) -> String {
+    if let Some(val) = headers
+        .get("CF-Connecting-IP")
+        .or_else(|| headers.get("X-Forwarded-For"))
+        .and_then(|v| v.to_str().ok())
+    {
+        // X-Forwarded-For can be "client, proxy1, proxy2" — take first
+        let real_ip = val.split(',').next().unwrap_or(val).trim();
+        if !real_ip.is_empty() {
+            return real_ip.to_string();
+        }
+    }
+    addr.ip().to_string()
+}
+
+/// Check if a request is coming through Cloudflare tunnel
+fn is_tunnel_request(addr: &SocketAddr, headers: &HeaderMap) -> bool {
+    addr.ip().is_loopback() && headers.get("CF-Connecting-IP").is_some()
+}
+
+// ===============================================================================
 // SEND MODE
 // ===============================================================================
 
 pub async fn start(
     config: DropConfig,
     tor_service: Option<&crate::tor::TorHiddenService>,
+    tunnel_service: Option<&crate::tunnel::CloudflareTunnel>,
 ) -> anyhow::Result<()> {
     let shutdown = Arc::new(Notify::new());
     let shutdown_clone = shutdown.clone();
@@ -133,6 +162,7 @@ pub async fn start(
             &config.file,
             &archive_bar,
         )?;
+
         file_size = archive_bytes.len() as u64;
         filename = archive_name;
 
@@ -213,6 +243,7 @@ pub async fn start(
         has_password: password_salt.is_some(),
         pinned_ip: std::sync::Mutex::new(None),
     };
+
     store.insert(drop);
 
     let state = Arc::new(AppState {
@@ -232,6 +263,7 @@ pub async fn start(
         .route("/d/{id}", get(serve_download_page))
         .route("/api/blob/{id}", get(serve_blob))
         .route("/api/meta/{id}", get(serve_meta))
+        .route("/ws/blob/{id}", get(ws_blob_handler))
         .layer(GovernorLayer::new(governor_conf));
 
     let app = rate_limited
@@ -279,7 +311,20 @@ pub async fn start(
         eprintln!();
     }
 
-    if !config.no_qr {
+    if let Some(tun) = tunnel_service {
+        let tunnel_url = tun.tunnel_url(&format!("/d/{}", drop_id), &key_fragment);
+        eprintln!(
+            " {} Tunnel: {}",
+            console::style("☁").bold(),
+            console::style(&tunnel_url).green()
+        );
+        if !config.no_qr {
+            crate::qr::print_qr(&tunnel_url);
+        }
+        eprintln!();
+    }
+
+    if !config.no_qr && tunnel_service.is_none() {
         crate::qr::print_qr(&url);
     }
 
@@ -296,6 +341,7 @@ pub async fn start(
 
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", config.bind, config.port)).await?;
+
     let shutdown_signal = shutdown.clone();
     axum::serve(
         listener,
@@ -321,6 +367,7 @@ pub async fn start(
 pub async fn start_receive(
     config: ReceiveConfig,
     tor_service: Option<&crate::tor::TorHiddenService>,
+    tunnel_service: Option<&crate::tunnel::CloudflareTunnel>,
 ) -> anyhow::Result<()> {
     let shutdown = Arc::new(Notify::new());
     let key = crypto::EncryptionKey::generate();
@@ -344,6 +391,7 @@ pub async fn start_receive(
 
     let rate_limited = Router::new()
         .route("/api/upload", post(receive_upload))
+        .route("/ws/upload", get(ws_upload_handler))
         .layer(GovernorLayer::new(governor_conf));
 
     let app = rate_limited
@@ -371,7 +419,20 @@ pub async fn start_receive(
         eprintln!();
     }
 
-    if !config.no_qr {
+    if let Some(tun) = tunnel_service {
+        let tunnel_url = tun.tunnel_url("/", &key_fragment);
+        eprintln!(
+            " {} Tunnel: {}",
+            console::style("☁").bold(),
+            console::style(&tunnel_url).green()
+        );
+        if !config.no_qr {
+            crate::qr::print_qr(&tunnel_url);
+        }
+        eprintln!();
+    }
+
+    if !config.no_qr && tunnel_service.is_none() {
         crate::qr::print_qr(&url);
     }
 
@@ -388,6 +449,7 @@ pub async fn start_receive(
 
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", config.bind, config.port)).await?;
+
     let shutdown_signal = shutdown.clone();
     axum::serve(
         listener,
@@ -491,7 +553,6 @@ async fn receive_upload(
             match std::fs::write(&output_path, &plaintext) {
                 Ok(_) => {
                     state.received.store(true, std::sync::atomic::Ordering::SeqCst);
-
                     eprintln!(
                         " {} Saved: {} ({})",
                         console::style("✅").bold(),
@@ -535,8 +596,8 @@ async fn receive_upload(
 
 fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Result<Vec<u8>> {
     use chacha20poly1305::{aead::{Aead, KeyInit}, XChaCha20Poly1305};
-
     const HEADER_SIZE: usize = 40;
+
     if data.len() < HEADER_SIZE {
         anyhow::bail!("Data too short for header");
     }
@@ -557,6 +618,7 @@ fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Re
         if offset + 4 > chunk_data.len() {
             anyhow::bail!("Truncated chunk length at chunk {}", chunk_index);
         }
+
         let chunk_len = u32::from_le_bytes(
             chunk_data[offset..offset + 4].try_into()?
         ) as usize;
@@ -565,6 +627,7 @@ fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Re
         if offset + chunk_len > chunk_data.len() {
             anyhow::bail!("Truncated chunk data at chunk {}", chunk_index);
         }
+
         let encrypted_chunk = &chunk_data[offset..offset + chunk_len];
         offset += chunk_len;
 
@@ -579,6 +642,7 @@ fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Re
             .map_err(|_| anyhow::anyhow!(
                 "Decryption failed at chunk {} — wrong key or corrupted", chunk_index
             ))?;
+
         plaintext.extend_from_slice(&decrypted);
     }
 
@@ -602,6 +666,245 @@ async fn serve_web_asset_receive(Path(path): Path<String>) -> Response {
 }
 
 // ===============================================================================
+// WEBSOCKET HANDLERS — P2P streaming (primary), HTTP is fallback
+// ===============================================================================
+
+async fn ws_blob_handler(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    let Some(drop) = state.store.get(&id) else {
+        return (StatusCode::NOT_FOUND, "Drop not found").into_response();
+    };
+
+    // Tunnel-aware IP pinning (uses shared helpers)
+    let tunnel = is_tunnel_request(&addr, &headers);
+    let client_ip = resolve_client_ip(&addr, &headers);
+
+    {
+        let mut pinned = drop.pinned_ip.lock().unwrap();
+        match pinned.as_ref() {
+            None => *pinned = Some(client_ip.clone()),
+            Some(ip) if ip == &client_ip => {}
+            Some(_) if tunnel => {}
+            Some(_) => {
+                return (StatusCode::FORBIDDEN, "Access denied").into_response();
+            }
+        }
+    }
+
+    let Some((count, should_delete)) = state.store.record_download(&id) else {
+        return (StatusCode::NOT_FOUND, "Drop not found").into_response();
+    };
+
+    eprintln!(
+        " {} WebSocket P2P download started from {}",
+        console::style("⚡").cyan(),
+        console::style(&addr.to_string()).dim()
+    );
+    progress::print_download_event(count, drop.max_downloads, &addr.to_string());
+
+    let encrypted_size = drop.encrypted_size;
+    let encrypted_path = drop.encrypted_path.clone();
+    let ciphertext = drop.ciphertext.clone();
+    let store = state.store.clone();
+    let shutdown = state.shutdown.clone();
+    let id_clone = id.clone();
+
+    ws.on_upgrade(move |socket| async move {
+        if let Err(e) = stream_blob_ws(socket, encrypted_size, encrypted_path, ciphertext).await {
+            eprintln!(
+                " {} WebSocket stream error: {}",
+                console::style("⚠").yellow(),
+                e
+            );
+        }
+
+        if should_delete {
+            tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+            store.remove(&id_clone);
+            progress::print_self_destruct();
+            if store.is_empty() {
+                shutdown.notify_one();
+            }
+        }
+    })
+}
+
+async fn stream_blob_ws(
+    mut socket: WebSocket,
+    encrypted_size: u64,
+    encrypted_path: Option<std::path::PathBuf>,
+    ciphertext: Option<Vec<u8>>,
+) -> anyhow::Result<()> {
+    // Send start message
+    let start_msg = serde_json::json!({
+        "type": "start",
+        "encrypted_size": encrypted_size,
+    });
+    socket
+        .send(Message::from(start_msg.to_string()))
+        .await
+        .map_err(|e| anyhow::anyhow!("WS send error: {}", e))?;
+
+    const CHUNK_SIZE: usize = 64 * 1024; // 64KB frames
+
+    if let Some(ref path) = encrypted_path {
+        use tokio::io::AsyncReadExt;
+        let mut file = tokio::fs::File::open(path).await?;
+        let mut buf = vec![0u8; CHUNK_SIZE];
+        loop {
+            let n = file.read(&mut buf).await?;
+            if n == 0 {
+                break;
+            }
+            socket
+                .send(Message::from(buf[..n].to_vec()))
+                .await
+                .map_err(|e| anyhow::anyhow!("WS send error: {}", e))?;
+        }
+    } else if let Some(ref data) = ciphertext {
+        for chunk in data.chunks(CHUNK_SIZE) {
+            socket
+                .send(Message::from(chunk.to_vec()))
+                .await
+                .map_err(|e| anyhow::anyhow!("WS send error: {}", e))?;
+        }
+    } else {
+        anyhow::bail!("No encrypted data available");
+    }
+
+    // Done
+    socket
+        .send(Message::from(r#"{"type":"done"}"#.to_string()))
+        .await
+        .map_err(|e| anyhow::anyhow!("WS send error: {}", e))?;
+
+    let _ = socket.close().await;
+    Ok(())
+}
+
+async fn ws_upload_handler(
+    State(state): State<Arc<ReceiveState>>,
+    ws: WebSocketUpgrade,
+) -> Response {
+    if state.received.load(std::sync::atomic::Ordering::SeqCst) {
+        return (StatusCode::GONE, "Already received").into_response();
+    }
+
+    ws.on_upgrade(move |socket| async move {
+        if let Err(e) = handle_ws_upload(socket, state).await {
+            eprintln!(
+                " {} WebSocket upload error: {}",
+                console::style("⚠").yellow(),
+                e
+            );
+        }
+    })
+}
+
+async fn handle_ws_upload(
+    mut socket: WebSocket,
+    state: Arc<ReceiveState>,
+) -> anyhow::Result<()> {
+    let mut filename = "received_file".to_string();
+    let mut encrypted_data: Vec<u8> = Vec::new();
+    let mut started = false;
+
+    while let Some(msg) = socket.recv().await {
+        let msg: Message = msg.map_err(|e| anyhow::anyhow!("WS recv error: {}", e))?;
+        match msg {
+            Message::Text(text) => {
+                let json: serde_json::Value = serde_json::from_str(&text)?;
+                match json["type"].as_str() {
+                    Some("start") => {
+                        if let Some(name) = json["filename"].as_str() {
+                            filename = name
+                                .replace("..", "")
+                                .replace('/', "")
+                                .replace('\\', "");
+                            if filename.is_empty() {
+                                filename = "received_file".to_string();
+                            }
+                        }
+                        if let Some(size) = json["size"].as_u64() {
+                            encrypted_data.reserve(size as usize);
+                        }
+                        started = true;
+                        eprintln!(
+                            " {} WebSocket upload started: {}",
+                            console::style("⚡").cyan(),
+                            filename
+                        );
+                    }
+                    Some("done") => break,
+                    _ => {}
+                }
+            }
+            Message::Binary(data) => {
+                if started {
+                    encrypted_data.extend_from_slice(&data);
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    if encrypted_data.is_empty() {
+        anyhow::bail!("No data received via WebSocket");
+    }
+
+    eprintln!(
+        " {} Received {} via P2P, decrypting...",
+        console::style("📥").bold(),
+        bytesize::ByteSize::b(encrypted_data.len() as u64)
+    );
+
+    let plaintext = decrypt_uploaded_blob(&encrypted_data, &state.key)?;
+
+    let output_path = state.output_dir.join(&filename);
+    std::fs::write(&output_path, &plaintext)?;
+
+    state
+        .received
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    eprintln!(
+        " {} Saved: {} ({})",
+        console::style("✅").bold(),
+        console::style(&filename).green(),
+        console::style(bytesize::ByteSize::b(plaintext.len() as u64).to_string()).dim()
+    );
+
+    let resp = serde_json::json!({
+        "type": "ok",
+        "saved_as": filename,
+        "size": plaintext.len()
+    });
+
+    let _ = socket
+        .send(Message::from(resp.to_string()))
+        .await;
+    let _ = socket.close().await;
+
+    let shutdown = state.shutdown.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        eprintln!(
+            "\n {} Transfer complete — self-destructing.",
+            console::style("💥").bold()
+        );
+        shutdown.notify_one();
+    });
+
+    Ok(())
+}
+
+// ===============================================================================
 // SEND MODE HANDLERS
 // ===============================================================================
 
@@ -618,6 +921,7 @@ async fn serve_blob(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
 ) -> Response {
     let Some(drop) = state.store.get(&id) else {
         let delay = 50 + rand::random::<u64>() % 150;
@@ -625,17 +929,22 @@ async fn serve_blob(
         return (StatusCode::NOT_FOUND, "Drop not found or already destroyed").into_response();
     };
 
-    // Scope the MutexGuard so it drops before any .await below
+    // ── Tunnel-aware IP pinning ──
+    // Through Cloudflare tunnel, all connections arrive from 127.0.0.1.
+    // Use CF-Connecting-IP / X-Forwarded-For to resolve the real client IP.
+    let client_ip = resolve_client_ip(&addr, &headers);
+    let tunnel = is_tunnel_request(&addr, &headers);
+
     {
         let mut pinned = drop.pinned_ip.lock().unwrap();
-        let client_ip = addr.ip().to_string();
         match pinned.as_ref() {
-            None => *pinned = Some(client_ip),
+            None => *pinned = Some(client_ip.clone()),
             Some(ip) if ip == &client_ip => {}
+            Some(_) if tunnel => {}  // Allow tunnel requests through
             Some(_) => {
                 eprintln!(
-                    " {} Blocked download attempt from {} (pinned to different IP)",
-                    console::style("🛡").red(), addr
+                    " {} Blocked download attempt from {} [resolved: {}] (pinned to different IP)",
+                    console::style("🛡").red(), addr, client_ip
                 );
                 return (
                     StatusCode::FORBIDDEN,
@@ -652,6 +961,7 @@ async fn serve_blob(
     progress::print_download_event(count, drop.max_downloads, &addr.to_string());
 
     let encrypted_size = drop.encrypted_size;
+
     let body = if let Some(ref path) = drop.encrypted_path {
         match tokio::fs::File::open(path).await {
             Ok(file) => Body::from_stream(ReaderStream::new(file)),

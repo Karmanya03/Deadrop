@@ -1,6 +1,6 @@
 [package]
 name = "deadrop"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "Zero-knowledge encrypted dead drop. One binary. One command. Gone."
 license = "MIT"
@@ -26,8 +26,9 @@ path = "src/main.rs"
 [dependencies]
 urlencoding = "2"
 # Web server
-axum = { version = "0.8", features = ["multipart"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
 tokio = { version = "1", features = ["full"] }
+futures-util = "0.3"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "limit", "compression-full", "set-header"] }
 tower_governor = { version = "0.8", features = ["axum"] }
@@ -48,7 +49,8 @@ tempfile = "3"
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.18"
 console = "0.16"
-
+reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
+dirs = "6"
 # QR code
 qrcode = "0.14"
 

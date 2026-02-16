@@ -2,7 +2,7 @@
 
 use clap::{Parser, Subcommand, Args};
 use std::path::PathBuf;
-use deadrop::{archive, config, server, tor};
+use deadrop::{archive, config, server, tor, tunnel};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -62,6 +62,10 @@ struct SendArgs {
     /// Enable Tor hidden service (.onion address)
     #[arg(long)]
     tor: bool,
+
+    /// Disable Cloudflare tunnel (local network only)
+    #[arg(long)]
+    no_tunnel: bool,
 }
 
 #[derive(Args, Debug)]
@@ -85,6 +89,10 @@ struct ReceiveArgs {
     /// Enable Tor hidden service (.onion address)
     #[arg(long)]
     tor: bool,
+
+    /// Disable Cloudflare tunnel (local network only)
+    #[arg(long)]
+    no_tunnel: bool,
 }
 
 /// Preprocess CLI args so `ded ./file` works without typing "send"
@@ -160,15 +168,17 @@ async fn main() -> anyhow::Result<()> {
                 );
 
                 vec![tmp_path]
-            } else {
-                for p in &args.paths {
-                    if !p.exists() {
-                        anyhow::bail!("Path not found: {}", p.display());
-                    }
-                }
-                args.paths.clone()
-            };
-
+} else {
+    let mut extended: Vec<PathBuf> = Vec::new();
+    for p in &args.paths {
+        let ep = extend_path(p.clone());
+        if !ep.exists() {
+            anyhow::bail!("Path not found: {}", p.display());
+        }
+        extended.push(ep);
+    }
+    extended
+};
             // ── Handle multi-file: bundle into tar.gz ──
             let final_path = if resolved_paths.len() > 1 {
                 let tmp_dir = std::env::temp_dir().join("deadrop-bundle");
@@ -204,7 +214,14 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
-            server::start(drop_config, tor_service.as_ref()).await?;
+            // ── Cloudflare tunnel (on by default, skip with --no-tunnel) ──
+            let tunnel_service = if args.no_tunnel {
+                None
+            } else {
+                tunnel::try_start_tunnel(drop_config.port).await
+            };
+
+            server::start(drop_config, tor_service.as_ref(), tunnel_service.as_ref()).await?;
         }
 
         Commands::Receive(args) => {
@@ -225,9 +242,38 @@ async fn main() -> anyhow::Result<()> {
                 None
             };
 
-            server::start_receive(recv_config, tor_service.as_ref()).await?;
+            // ── Cloudflare tunnel (on by default, skip with --no-tunnel) ──
+            let tunnel_service = if args.no_tunnel {
+                None
+            } else {
+                tunnel::try_start_tunnel(recv_config.port).await
+            };
+
+            server::start_receive(recv_config, tor_service.as_ref(), tunnel_service.as_ref()).await?;
         }
     }
-
     Ok(())
+}
+fn extend_path(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        // Already extended? Leave it alone.
+        let s = path.to_string_lossy();
+        if s.starts_with(r"\\?\") {
+            return path;
+        }
+        // Make absolute first (\\?\ requires absolute paths)
+        let absolute = if path.is_absolute() {
+            path.clone()
+        } else {
+            std::env::current_dir()
+                .unwrap_or_default()
+                .join(&path)
+        };
+        PathBuf::from(format!(r"\\?\{}", absolute.display()))
+    }
+    #[cfg(not(windows))]
+    {
+        path
+    }
 }

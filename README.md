@@ -22,6 +22,7 @@
   <img src="https://img.shields.io/badge/after_download-self_destructs-ff4444?style=flat-square" alt="self destruct" />
   <img src="https://img.shields.io/badge/dependencies-just_the_binary-blueviolet?style=flat-square" alt="single binary" />
   <img src="https://img.shields.io/badge/tor-hidden_service-blueviolet?style=flat-square" alt="tor" />
+  <img src="https://img.shields.io/badge/tunnel-cloudflare-blueviolet?style=flat-square" alt="cloudflare" />
 </p>
 
 ---
@@ -30,85 +31,79 @@
 
 Remember in spy movies when someone leaves a briefcase under a park bench, and someone else picks it up later? That's a dead drop.
 
-This is that, but for files. Except the briefcase is encrypted with military-grade cryptography, the park bench self-destructs after pickup, nobody — not even the bench — knows what's inside, and now the bench can hide on the dark web.
+This is that, but for files. Except the briefcase is encrypted with military-grade cryptography, the park bench self-destructs after pickup, nobody — not even the bench — knows what's inside, the bench can hide on the dark web, AND it now has a Cloudflare-powered tunnel so anyone on the internet can pick it up without you port-forwarding like it's 2003.
+
+### How a drop works
 
 ```
-    ┌─────────┐                                          ┌─────────┐
-    │   You   │                                          │  Friend │
-    └────┬────┘                                          └────┬────┘
-         │                                                    │
-         │  ded ./secret-plans.pdf                            │
-         │  ━━━━━━━━━━━━━━━━━━━━━━━                           │
-         │                                                    │
-    ┌────┴────────────────────────────────────────────────────┐│
-    │                  Your Machine                           ││
-    │  ┌──────────┐    ┌──────────────┐    ┌──────────────┐  ││
-    │  │ Encrypt  │───►│  Ciphertext  │───►│ HTTP Server  │  ││
-    │  │ (Rust)   │    │  (on disk)   │    │ (Axum)       │  ││
-    │  └──────────┘    └──────────────┘    └──────┬───────┘  ││
-    │       Key goes in URL #fragment             │          ││
-    └─────────────────────────────────────────────┼──────────┘│
-         │                                        │           │
-         │  Sends link via Signal / QR scan       │           │
-         │ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─►│           │
-         │                                        │           │
-         │                                  ┌─────┴───────┐   │
-         │                                  │  Opens URL   │◄──┘
-         │                                  │  in browser  │
-         │                                  └─────┬───────┘
-         │                                        │
-         │                          ┌─────────────┴─────────────┐
-         │                          │  Browser fetches blob     │
-         │                          │  Extracts #key            │
-         │                          │  WASM decrypts locally    │
-         │                          │  File downloads           │
-         │                          └─────────────┬─────────────┘
-         │                                        │
-    ┌────┴──────────────────────────────┐         │
-    │  Self-destruct triggered          │         │
-    │  Drop marked as burned            │         │
-    │  Server shuts down                │         │
-    └───────────────────────────────────┘         │
-         │                                        │
-         ▼                                        ▼
-    What file? There was no file.           Got it. Thanks.
+  YOU                           YOUR MACHINE                         FRIEND
+   |                                 |                                  |
+   |   ded secret-plans.pdf          |                                  |
+   |-------------------------------->|                                  |
+   |                                 |                                  |
+   |   1. Encrypt file (Rust)        |                                  |
+   |   2. Key goes in URL #fragment  |                                  |
+   |   3. Start server (Axum)        |                                  |
+   |   4. Cloudflare tunnel opens    |                                  |
+   |                                 |                                  |
+   |   Share link (Signal/QR/etc)    |                                  |
+   |------------------------------------------------------>            |
+   |                                 |                                  |
+   |                                 |  <--- Opens link in browser -----|
+   |                                 |                                  |
+   |                                 |  --- Try P2P WebSocket -------->|
+   |                                 |  --- Fallback: HTTP download -->|
+   |                                 |                                  |
+   |                                 |       Browser extracts #key      |
+   |                                 |       WASM decrypts locally      |
+   |                                 |       File saves to device       |
+   |                                 |                                  |
+   |   BOOM. Self-destruct.          |                                  |
+   |   Drop burned. Server dies.     |                                  |
+   |   Tunnel closed.                |                                  |
+   |                                 |                                  |
+   V                                 V                                  V
+   What file?                    What server?                    Got it, thanks.
 ```
 
 ## Features
 
 ### Core
 
-| Feature | Description |
+| Feature | What it does |
 |---|---|
-| **End-to-end encrypted** | XChaCha20-Poly1305. The server never sees the key — it's basically a blind courier. |
-| **Key in URL fragment** | The `#key` part never hits server logs, proxies, or HTTP headers. Invisible by design. |
-| **Self-destruct** | Expire by time, by download count, or both. This message will self-destruct in... |
-| **Works on phones** | Receiver only needs a browser. No app, no account, no soul-selling signup. |
-| **Send folders** | Directories auto-pack to `.tar.gz`. Your entire `homework/` folder, encrypted. |
+| **End-to-end encrypted** | XChaCha20-Poly1305. The server is a blind courier — it couldn't read your file even if you asked nicely. |
+| **Key in URL fragment** | The `#key` part never hits server logs, proxies, or HTTP headers. HTTP spec says so. Fight the spec, not us. |
+| **Self-destruct** | Expire by time, download count, or both. This message will self-destruct in... you get it. |
+| **Cloudflare tunnel** | Auto-creates a public `trycloudflare.com` URL. No port forwarding, no static IP, no DNS fiddling. Just works. |
+| **WebSocket P2P transfer** | Browser downloads via WebSocket for faster, streamed delivery. If P2P fails, HTTP kicks in. You won't even notice. |
+| **Works on phones** | Receiver needs a browser. That's it. No app, no account, no "sign up with your firstborn." |
+| **Send folders** | Directories auto-pack to `.tar.gz`. Your entire `homework/` folder, encrypted. We won't ask what's in it. |
 | **Multi-file drops** | `ded file1.txt file2.pdf photos/` — bundles everything into one encrypted drop. |
 | **Stdin / clipboard** | `echo "secret" \| ded -` — pipe anything. Your terminal is the dead drop. |
 | **Unlimited file size** | Streams from disk — your 50GB file won't eat your RAM for breakfast. |
-| **Password protection** | Argon2id key derivation (64MB memory-hard, GPU-resistant). Receiver gets a password prompt in-browser, key is derived client-side. The server never sees the password OR the key. |
+| **Password protection** | Argon2id key derivation (64MB memory-hard, GPU-resistant). Receiver gets a password prompt in-browser, key derived client-side. Server never sees the password OR the key. |
 | **QR code** | Because typing URLs is for people who still use fax machines. |
 | **Receive mode** | `ded receive` — phone-to-PC uploads. Your phone becomes the dead drop. |
-| **Tor hidden service** | `--tor` — spins up a `.onion` address. The dark web called, it wants its files back. |
-| **Single binary** | No runtime, no Docker, no config files. Just one executable. |
+| **Tor hidden service** | `--tor` — spins up a `.onion` address. For when Cloudflare isn't paranoid enough. |
+| **Single binary** | No runtime, no Docker, no config files. One executable. Runs anywhere Rust compiles (so, everywhere). |
 
 ### Security Hardening
 
-| Feature | Description |
-|---|---|
-| **Fragment auto-clear** | `#key` is stripped from the URL bar and history the instant the page loads. |
-| **IP pinning** | Download is locked to the first IP that connects — everyone else gets a 403. |
-| **Security headers** | CSP, `X-Frame-Options: DENY`, `no-referrer`, `no-cache`. The whole paranoia buffet. |
-| **Rate limiting** | 2 req/sec per IP with burst of 5 — stops brute-force attempts cold. |
-| **16-char drop IDs** | ~2^64 possible IDs. You'll win the lottery before guessing one. |
-| **Constant-time 404s** | Random delay on not-found responses — prevents timing-based enumeration. |
-| **Burn page** | Late visitors see "This drop was already downloaded and destroyed." No second chances. |
-| **Auto-expire page** | Tab stays open past expiry? Key nuked from JS memory. The UI self-destructs too. |
-| **Memory locking** | `mlock()` on Unix prevents the key from being swapped to disk. It lives in RAM or dies. |
-| **Zero-write deletion** | Encrypted temp files get overwritten with zeros before `rm`. Forensics won't find anything. |
-| **Key zeroization** | Key wiped from RAM (via `zeroize`) on drop, both server and browser side. |
+The "we thought of that" section:
+
+| Layer | What | Why you should care |
+|---|---|---|
+| **Encryption** | XChaCha20-Poly1305 (256-bit, AEAD) | Same cipher WireGuard and Cloudflare use. If it's broken, we all have bigger problems. |
+| **Zero-knowledge** | Key lives in URL `#fragment` only | Server literally cannot learn the key. It's like asking a mailman to read a letter through a sealed envelope. Blindfolded. |
+| **Browser hygiene** | Fragment auto-cleared from URL bar and history | `history.replaceState()` scrubs the `#key` the instant the page loads. |
+| **Anti-forensics** | `mlock()` + `zeroize` + zero-write deletion | Key pinned in RAM (never swapped to disk), wiped on drop. Temp files overwritten with zeros before `rm`. CSI can go home. |
+| **Access control** | IP pinning + rate limiting + 64-bit IDs | Download locked to first IP. 2 req/sec rate limit. ~2^64 possible drop IDs — you'll find Waldo first. |
+| **Network** | Security headers (CSP, X-Frame-Options, no-referrer) | The whole paranoia buffet. All you can eat. |
+| **Burn page** | "This drop was already downloaded and destroyed." | Late visitors get a polite middle finger. |
+| **Auto-expire** | Tab open past expiry? Key nuked from JS memory. | The UI self-destructs too. Even your open tab isn't safe. |
+| **Anonymity** | Tor hidden service (`.onion`) | When Cloudflare tunnels aren't enough, go full dark web. |
+| **Constant-time 404s** | Random delay on not-found responses | Prevents timing attacks. Hackers hate this one weird trick. |
 
 ## Installation
 
@@ -124,11 +119,11 @@ curl -fsSL https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.sh 
 irm https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.ps1 | iex
 ```
 
-Both scripts detect your platform automatically, download the right binary, rename it to `ded`, and add it to your PATH.
+Both scripts auto-detect your platform, grab the right binary, rename it to `ded`, and add it to your PATH. Easier than ordering food online.
 
 ### Download a binary
 
-Grab the latest release for your platform from [**Releases**](https://github.com/Karmanya03/Deadrop/releases).
+Grab the latest from [**Releases**](https://github.com/Karmanya03/Deadrop/releases):
 
 | Platform | Binary | Architecture |
 |---|---|---|
@@ -156,7 +151,7 @@ cargo install deadrop
 
 ### Build from source
 
-For the trust-no-one crowd:
+For the trust-no-one crowd (respect):
 
 ```bash
 git clone https://github.com/Karmanya03/Deadrop.git
@@ -168,10 +163,10 @@ cargo build --release
 ### Update
 
 ```bash
-# Linux/macOS — same as install, overwrites the old binary
+# Linux/macOS — same command, overwrites old binary
 curl -fsSL https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.sh | bash
 
-# Windows PowerShell — same as install, overwrites the old binary
+# Windows PowerShell
 irm https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.ps1 | iex
 
 # Via cargo
@@ -181,16 +176,16 @@ cargo install deadrop --force
 ### Uninstall
 
 ```bash
-# If installed via script (Linux/macOS)
+# Installed via script (Linux/macOS)
 rm -f ~/.local/bin/ded
 
-# If installed to /usr/local/bin/
+# Installed to /usr/local/bin/
 sudo rm -f /usr/local/bin/ded
 
-# If installed via script (Windows PowerShell)
+# Installed via script (Windows PowerShell)
 Remove-Item "$env:USERPROFILE\.local\bin\ded.exe" -Force
 
-# If installed via cargo
+# Installed via cargo
 cargo uninstall deadrop
 ```
 
@@ -228,7 +223,7 @@ ded receive -o ~/Downloads/
 ded receive -p 9090 --no-qr
 ```
 
-Scan the QR from your phone, pick a file, it gets encrypted in-browser, sent to your PC, decrypted, and saved. One upload, then the server self-destructs.
+Scan the QR from your phone, pick a file, it gets encrypted in-browser, sent to your PC, decrypted, and saved. One upload, then the server self-destructs. Your phone just ghosted your PC (in a good way).
 
 ### Password mode
 
@@ -237,15 +232,15 @@ Scan the QR from your phone, pick a file, it gets encrypted in-browser, sent to 
 ded secret.pdf --pw "correct-horse-battery-staple"
 ```
 
-How it works under the hood:
+What happens under the hood:
 
 1. Server encrypts the file with a key derived from your password via **Argon2id** (64MB, 3 iterations)
-2. The URL contains the **salt** (not the key) — so the link alone can't decrypt anything
+2. The URL contains the **salt** (not the key) — the link alone is useless
 3. Receiver opens the link, sees a password prompt, enters the password
 4. Browser derives the same key via **Argon2id in WASM** (same params, runs client-side)
 5. File decrypts locally. Server never sees the password or the key. Ever.
 
-> **Pro tip:** Send the link over Slack, tell them the password on a phone call. Two channels, maximum paranoia.
+Pro tip: Send the link over Slack, tell them the password on a phone call. Two channels, maximum paranoia, minimum effort.
 
 ### The spicy options
 
@@ -259,10 +254,10 @@ ded confession.txt -e 30s
 # Full Mission Impossible mode
 ded plans.pdf -n 1 -e 30s --pw "this-message-will-self-destruct"
 
-# Dark web drop
+# Dark web drop — Tor hidden service
 ded whistleblower-docs.pdf --tor
 
-# Receive via Tor
+# Receive via Tor — maximum stealth
 ded receive --tor -o ~/secrets/
 ```
 
@@ -275,7 +270,6 @@ ded receive --tor -o ~/secrets/
      ██║  ██║██╔══╝  ██╔══██║██║  ██║██╔══██╗██║   ██║██╔═══╝
      ██████╔╝███████╗██║  ██║██████╔╝██║  ██║╚██████╔╝██║
      ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝
-          ⚡ zero-knowledge encrypted file sharing ⚡
 
   ┌──────────────────────────────────────────────────┐
   │  URL  http://192.168.1.42:8080/d/a3f9c1b2#xK9m  │
@@ -288,63 +282,193 @@ ded receive --tor -o ~/secrets/
   │  └─ Crypto     XChaCha20-Poly1305                 │
   └──────────────────────────────────────────────────┘
 
-  Tor: http://abc...xyz.onion/d/a3f9c1b2#pw:...       (with --tor)
+  Tunnel: https://random-words.trycloudflare.com/d/a3f9c1b2#xK9m
+  Tor:    http://abc...xyz.onion/d/a3f9c1b2#pw:...    (with --tor)
 
-  █▀▀▀▀▀█ ▀▀▀█▄█ █▀▀▀▀▀█     <- QR code appears here
+  █▀▀▀▀▀█ ▀▀▀█▄█ █▀▀▀▀▀█     <- QR code
   █ ███ █ █▀█ ▀▄  █ ███ █        scan with phone
   ...
 ```
 
-### What the receiver sees (password-protected)
+## How It Works
+
+### Send flow
+
+Think of it like a relay race, except the baton is encrypted and the track self-destructs.
 
 ```
-  ┌──────────────────────────────────────────┐
-  │  DEADROP  encrypted dead drop            │
-  │                                          │
-  │  File       secret.pdf                   │
-  │  Size       4.2 MB                       │
-  │  Expires    59m                          │
-  │  Encryption XChaCha20-Poly1305           │
-  │                                          │
-  │  This drop requires a password           │
-  │  ┌──────────────────────────────────┐    │
-  │  │ Enter password...               █│    │
-  │  └──────────────────────────────────┘    │
-  │                                          │
-  │  [ Unlock & Download ]                   │
-  └──────────────────────────────────────────┘
+  SENDER                         SERVER (your PC)                     RECEIVER
+    |                                  |                                  |
+    |  1. Generate 256-bit key         |                                  |
+    |     (or derive from password)    |                                  |
+    |  2. Encrypt with XChaCha20       |                                  |
+    |  3. Store ciphertext on disk --->|                                  |
+    |  4. Key goes into URL #fragment  |                                  |
+    |     (or salt, if --pw)           |                                  |
+    |  5. Cloudflare tunnel opens ---->| (public URL, no port forwarding) |
+    |                                  |                                  |
+    |  6. Share link  -------------------------------------------->       |
+    |     (Signal, QR, carrier pigeon) |                                  |
+    |                                  |                                  |
+    |                                  | <--- 7. Opens link --------------|
+    |                                  |                                  |
+    |                                  | --- 8a. WebSocket P2P -------->  |
+    |                                  |     (fast, streamed)             |
+    |                                  |                                  |
+    |                                  | --- 8b. HTTP fallback -------->  |
+    |                                  |     (if P2P fails, auto-switch)  |
+    |                                  |                                  |
+    |                                  |  9. Browser extracts #key        |
+    |                                  |     (or prompts for password)    |
+    |                                  | 10. WASM decrypts in browser     |
+    |                                  | 11. File saves to device         |
+    |                                  |                                  |
+    |  SELF-DESTRUCT SEQUENCE:         |                                  |
+    |  - Drop marked as burned         |                                  |
+    |  - Ciphertext zero-wiped         |                                  |
+    |  - Keys zeroized from RAM        |                                  |
+    |  - Tunnel closed                 |                                  |
+    |  - Server shuts down             |                                  |
+    V                                  V                                  V
 ```
 
-After entering the correct password, Argon2id runs in WASM (takes about 2-5 seconds), then the file decrypts and downloads. Wrong password? Decryption fails gracefully — try again.
+### Password flow (zero-knowledge)
 
-## Demo Commands
+The server is so clueless about your password, it makes Jon Snow look omniscient.
 
-Run one at a time — each starts a server. Ctrl+C to stop, then run the next.
+```
+  SENDER                         SERVER                               RECEIVER
+    |                                  |                                  |
+    |  ded file --pw "hunter2"         |                                  |
+    |                                  |                                  |
+    |  1. Argon2id(password, salt)     |                                  |
+    |     --> 256-bit key              |                                  |
+    |  2. Encrypt file with key        |                                  |
+    |  3. URL = .../d/id#pw:<salt>     |                                  |
+    |     (salt in URL, NOT the key)   |                                  |
+    |                                  |                                  |
+    |  4. Share link  -------------------------------------------->       |
+    |  5. Share password  ------ (different channel: call, SMS) -->       |
+    |                                  |                                  |
+    |                                  | <--- 6. Opens link --------------|
+    |                                  | ---> 7. Serves download page --->|
+    |                                  |                                  |
+    |                                  |      8. Password prompt appears  |
+    |                                  |      9. Types password           |
+    |                                  |     10. WASM: Argon2id(pw,salt)  |
+    |                                  |         --> derives same key     |
+    |                                  |                                  |
+    |                                  | <--11. Fetch encrypted blob -----|
+    |                                  | -->12. Return ciphertext ------->|
+    |                                  |                                  |
+    |                                  |     13. WASM decrypts locally    |
+    |                                  |     14. File downloads           |
+    |                                  |                                  |
+    |  Server never saw: password, key, or file contents. It died happy. |
+    V                                  V                                  V
+```
 
-| # | Feature | Command | What happens |
-|---|---|---|---|
-| 1 | Single file | `ded secret.pdf` | Encrypts, serves link, browser decrypts, self-destructs |
-| 2 | Folder | `ded ./my-folder/` | Archives, encrypts, serves `.tar.gz` |
-| 3 | Multi-file | `ded file1.txt file2.pdf pics/` | Bundles all into one encrypted archive |
-| 4 | Stdin pipe | `echo "swordfish" \| ded -` | Reads stdin, drops as `clipboard.txt` |
-| 5 | Custom expiry | `ded file.txt -e 5m` | Auto-expires after 5 minutes |
-| 6 | Download limit | `ded file.txt -n 3` | Self-destructs after 3 downloads |
-| 7 | No QR | `ded file.txt --no-qr` | URL only, no QR code |
-| 8 | Password | `ded file.txt --pw "hunter2"` | Receiver gets password prompt, Argon2id in-browser |
-| 9 | Custom port | `ded file.txt -p 9090` | Listens on port 9090 |
-| 10 | Full paranoia | `ded file.txt -n 1 -e 30s --pw "yolo"` | 1 download, 30s, password. Gone. |
-| 11 | Receive mode | `ded receive -o ~/Downloads/` | Upload page, phone sends file to PC |
-| 12 | Receive custom | `ded receive -p 9999 --no-qr` | Custom port receive, no QR |
-| 13 | Tor send | `ded secret.pdf --tor` | Generates `.onion` URL |
-| 14 | Tor receive | `ded receive --tor -o ~/secrets/` | Tor receive, maximum stealth |
-| 15 | IP pinning test | `ded file.txt -n 2` | Download on PC, try on phone, gets 403 |
-| 16 | Auto-expiry test | `ded file.txt -e 30s` | Wait 30s, open URL, "Drop not found" |
+### Receive flow
+
+```
+  PC (you)                       SERVER (your PC)                     PHONE
+    |                                  |                                  |
+    |  ded receive                     |                                  |
+    |  1. Generate key  -------------->|                                  |
+    |  2. Key goes into QR code        |                                  |
+    |                                  |                                  |
+    |                                  | <--- 3. Scan QR, open page -----|
+    |                                  |                                  |
+    |                                  |      4. Pick file on phone       |
+    |                                  |      5. WASM encrypts in-browser |
+    |                                  |                                  |
+    |                                  | <--- 6. Upload ciphertext ------|
+    |                                  |                                  |
+    |  7. Server decrypts  <-----------|                                  |
+    |  8. Saves to disk                |                                  |
+    |                                  |                                  |
+    |  Done. Server self-destructs. Phone can leave now.                  |
+    V                                  V                                  V
+```
+
+### Cloudflare tunnel flow
+
+No more "open port 8080 on your router" nonsense. No more begging your ISP for a static IP.
+
+```
+  YOUR MACHINE                   CLOUDFLARE                          RECEIVER
+    |                                  |                                  |
+    |  Server starts on localhost      |                                  |
+    |                                  |                                  |
+    |  1. cloudflared creates tunnel ->|                                  |
+    |     (outbound connection only)   |                                  |
+    |                                  |                                  |
+    |  2. Gets public URL:             |                                  |
+    |     https://random.trycloudflare.com                                |
+    |                                  |                                  |
+    |                                  | <--- 3. Receiver opens URL ------|
+    |                                  | ---> 4. Routes to your machine ->|
+    |                                  |                                  |
+    |  5. File transfer happens        |                                  |
+    |     (P2P WebSocket or HTTP)      |                                  |
+    |                                  |                                  |
+    |  6. Drop self-destructs          |                                  |
+    |  7. Tunnel closes                |                                  |
+    V                                  V                                  V
+```
+
+Cloudflare only sees encrypted bytes. The `#key` fragment never leaves the browser. It's turtles (encryption) all the way down.
+
+### Tor flow
+
+For when you want to share files and also cosplay as a ghost:
+
+```
+  SENDER                         TOR NETWORK (3 relays)              RECEIVER
+    |                                  |                                  |
+    |  ded --tor secret.pdf            |                                  |
+    |                                  |                                  |
+    |  1. Spins up .onion service  --->|                                  |
+    |     (takes ~30-60 seconds)       |                                  |
+    |                                  |                                  |
+    |  2. Share .onion URL  -----------|------------------------------>   |
+    |                                  |                                  |
+    |                                  | <--- 3. Opens in Tor Browser ---|
+    |                                  | ---> 4. Encrypted bytes ------->|
+    |                                  |                                  |
+    |  No IP. No trace. No idea.       |      5. WASM decrypts locally   |
+    V                                  V                                  V
+```
+
+### The download fallback system
+
+Because the internet is held together with duct tape and prayers:
+
+```
+  Browser opens download link
+    |
+    +--> Try WebSocket P2P (fast, streamed, chunked)
+    |      |
+    |      +--> SUCCESS --> Decrypt with WASM --> Save file
+    |      |
+    |      +--> FAIL (timeout/error/blocked)
+    |             |
+    |             +--> Fallback to HTTP download (reliable, standard fetch)
+    |                    |
+    |                    +--> SUCCESS --> Decrypt with WASM --> Save file
+    |                    |
+    |                    +--> FAIL --> Show error message
+    |
+    +--> Either way, server self-destructs after successful download
+```
+
+The switch from P2P to HTTP is automatic and invisible. The receiver doesn't know or care. It just works, like magic, except it's actually just good error handling.
 
 ## Flags Cheat Sheet
 
 ### `ded [send]` — Send mode (default)
 
-`send` is optional — `ded file.txt` and `ded send file.txt` are identical.
+`send` is optional — `ded file.txt` and `ded send file.txt` are the same thing.
 
 | Flag | Short | Default | Description |
 |---|---|---|---|
@@ -367,196 +491,60 @@ Run one at a time — each starts a server. Ctrl+C to stop, then run the next.
 | `--no-qr` | — | `false` | Suppress QR code |
 | `--tor` | — | `false` | Enable Tor hidden service |
 
-## How It Works
+## Demo Commands
 
-### Send flow
+Run one at a time — each starts a server. Ctrl+C to stop, then try the next.
 
-```
-  ┌──────────┐          ┌────────────────────┐          ┌──────────┐
-  │  Sender  │          │   Server (your PC) │          │ Receiver │
-  └─────┬────┘          └─────────┬──────────┘          └─────┬────┘
-        │                         │                           │
-        │  1. Generate random     │                           │
-        │     256-bit key         │                           │
-        │     (or derive from pw) │                           │
-        │                         │                           │
-        │  2. Encrypt file        │                           │
-        │     XChaCha20-Poly1305  │                           │
-        │                         │                           │
-        │  3. Store ciphertext ──►│                           │
-        │                         │                           │
-        │  4. Key → URL #fragment │                           │
-        │     (or salt if --pw)   │                           │
-        │                         │                           │
-        │  5. Share link ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─►│
-        │     (Signal, QR, etc.)  │                           │
-        │                         │                           │
-        │                         │◄── 6. Open link ──────────│
-        │                         │                           │
-        │                         │─── 7. Serve encrypted ──►│
-        │                         │       blob (HTTP)         │
-        │                         │                           │
-        │                         │    8. Browser extracts    │
-        │                         │       #key (or prompts    │
-        │                         │        for password)      │
-        │                         │                           │
-        │                         │    9. WASM decrypts       │
-        │                         │       locally in browser  │
-        │                         │                           │
-        │                         │   10. File downloads      │
-        │                         │       to device           │
-        │                         │                           │
-        │  ┌─────────────────────────────────────────┐        │
-        │  │  Self-destruct → Burned → Server off    │        │
-        │  └─────────────────────────────────────────┘        │
-        ▼                                                     ▼
-```
+| # | Feature | Command | What happens |
+|---|---|---|---|
+| 1 | Single file | `ded secret.pdf` | Encrypts, serves, browser decrypts, self-destructs |
+| 2 | Folder | `ded ./my-folder/` | Archives to `.tar.gz`, encrypts, serves |
+| 3 | Multi-file | `ded file1.txt file2.pdf pics/` | Bundles into one encrypted archive |
+| 4 | Stdin pipe | `echo "swordfish" \| ded -` | Drops as `clipboard.txt` |
+| 5 | Custom expiry | `ded file.txt -e 5m` | Dies after 5 minutes whether downloaded or not |
+| 6 | Download limit | `ded file.txt -n 3` | Self-destructs after 3 downloads |
+| 7 | No QR | `ded file.txt --no-qr` | URL only, no QR code clutter |
+| 8 | Password | `ded file.txt --pw "hunter2"` | Receiver gets password prompt, Argon2id in-browser |
+| 9 | Custom port | `ded file.txt -p 9090` | Listens on port 9090 |
+| 10 | Full paranoia | `ded file.txt -n 1 -e 30s --pw "yolo"` | 1 download, 30s, password. Ethan Hunt approved. |
+| 11 | Receive mode | `ded receive -o ~/Downloads/` | Upload page, phone sends file to PC |
+| 12 | Receive custom | `ded receive -p 9999 --no-qr` | Custom port, no QR |
+| 13 | Tor send | `ded secret.pdf --tor` | Generates `.onion` URL. Welcome to the dark side. |
+| 14 | Tor receive | `ded receive --tor -o ~/secrets/` | Tor receive. Maximum stealth. |
+| 15 | IP pinning test | `ded file.txt -n 2` | Download on PC, try on phone = 403. Get rekt. |
+| 16 | Auto-expiry test | `ded file.txt -e 30s` | Wait 30s, open URL = "Drop not found" |
 
-### Password flow (zero-knowledge)
+## Threat Model
 
-```
-  ┌──────────┐          ┌────────────────────┐          ┌──────────┐
-  │  Sender  │          │   Server (your PC) │          │ Receiver │
-  └─────┬────┘          └─────────┬──────────┘          └─────┬────┘
-        │                         │                           │
-        │  ded file --pw "pass"   │                           │
-        │                         │                           │
-        │  1. Argon2id(pass,salt) │                           │
-        │     → 256-bit key       │                           │
-        │                         │                           │
-        │  2. Encrypt with key    │                           │
-        │  3. URL = #pw:<salt>    │                           │
-        │     (NOT the key!)      │                           │
-        │                         │                           │
-        │  5. Share link ─ ─ ─ ─ ─│─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─►│
-        │  6. Tell password  ─ ─ ─│─ ─ ─ ─ (phone call) ─ ─►│
-        │                         │                           │
-        │                         │◄── 7. Open link ──────────│
-        │                         │                           │
-        │                         │    8. Browser shows       │
-        │                         │       password prompt     │
-        │                         │                           │
-        │                         │    9. Receiver types pw   │
-        │                         │   10. WASM: Argon2id      │
-        │                         │       (pw,salt) → key     │
-        │                         │                           │
-        │                         │◄──11. Fetch blob ─────────│
-        │                         │──►12. Return ciphertext──►│
-        │                         │                           │
-        │                         │   13. WASM decrypts       │
-        │                         │   14. File downloads      │
-        │                         │                           │
-        │    ┌──────────────────────────────────────┐         │
-        │    │  Server never saw: password or key   │         │
-        │    └──────────────────────────────────────┘         │
-        ▼                                                     ▼
-```
+### What we protect against
 
-### Receive flow
-
-```
-  ┌──────────┐          ┌────────────────────┐          ┌──────────┐
-  │ Receiver │          │   Server (your PC) │          │  Phone   │
-  │   (PC)   │          │                    │          │ (sender) │
-  └─────┬────┘          └─────────┬──────────┘          └─────┬────┘
-        │                         │                           │
-        │  ded receive            │                           │
-        │                         │                           │
-        │  1. Generate key ──────►│                           │
-        │  2. Key → QR code       │                           │
-        │                         │                           │
-        │                         │◄── 3. Scan QR, open ─────│
-        │                         │       upload page         │
-        │                         │                           │
-        │                         │    4. Pick file           │
-        │                         │    5. WASM encrypts       │
-        │                         │       in-browser          │
-        │                         │                           │
-        │                         │◄── 6. Upload ciphertext ─│
-        │                         │                           │
-        │  7. Server decrypts  ◄──│                           │
-        │  8. Saves to disk       │                           │
-        │                         │                           │
-        │  ┌──────────────────────────────────────┐           │
-        │  │  Saved → Self-destruct → Server off  │           │
-        │  └──────────────────────────────────────┘           │
-        ▼                                                     ▼
-```
-
-The critical insight: the `#fragment` in a URL is **never sent to the server**. Not in HTTP requests, not in logs, not in referrer headers. The server literally cannot learn the key even if it wanted to. It's like trying to read a letter through a sealed envelope while blindfolded.
-
-### Tor flow
-
-```
-  ┌──────────┐     ┌─────────────┐     ┌──────────────┐     ┌──────────┐
-  │  Sender  │────►│  ded --tor  │────►│  Tor Network  │────►│ Receiver │
-  │          │     │             │     │  (.onion)     │     │ (Tor     │
-  │          │     │  Generates  │     │               │     │  Browser)│
-  │          │     │  .onion URL │     │  3 relays     │     │          │
-  └──────────┘     └─────────────┘     └──────────────┘     └──────────┘
-                                                               │
-                                        No IP. No trace.       │
-                                        Just encrypted bytes.  │
-                                                               ▼
-                                                          File decrypts
-                                                          in browser
-```
-
-## Security Architecture
-
-### Defense in Depth
-
-```
-  ╔══════════════════════════════════════════════════════════════════╗
-  ║  Layer 7 │ Self-destruct    One download → burn → server off    ║
-  ╠══════════╪══════════════════════════════════════════════════════╣
-  ║  Layer 6 │ Browser          Fragment auto-clear + auto-expire   ║
-  ╠══════════╪══════════════════════════════════════════════════════╣
-  ║  Layer 5 │ Anti-forensics   mlock() + zeroize + zero-write     ║
-  ╠══════════╪══════════════════════════════════════════════════════╣
-  ║  Layer 4 │ Access control   IP pinning + rate limit + 64-bit ID║
-  ╠══════════╪══════════════════════════════════════════════════════╣
-  ║  Layer 3 │ Network          HTTP + security headers             ║
-  ╠══════════╪══════════════════════════════════════════════════════╣
-  ║  Layer 2 │ Zero-knowledge   Key in URL #fragment only          ║
-  ╠══════════╪══════════════════════════════════════════════════════╣
-  ║  Layer 1 │ Encryption       XChaCha20-Poly1305 (256-bit, AEAD) ║
-  ╠══════════╪══════════════════════════════════════════════════════╣
-  ║  Layer 0 │ Anonymity        Tor hidden service (.onion)        ║
-  ╚══════════╧══════════════════════════════════════════════════════╝
-```
-
-### Threat Model
-
-**Protected against:**
-
-| Threat | How |
+| Threat | How we handle it |
 |---|---|
-| Server operator learning file contents | Zero-knowledge — key never reaches server |
-| Man-in-the-middle reading the key | Key lives in `#fragment`, never transmitted over HTTP |
-| Someone intercepting the URL (with `--pw`) | URL contains salt, not key. They still need the password. |
-| Network eavesdropping | Encryption at application layer (XChaCha20-Poly1305) |
-| Server logs leaking the key | Fragments aren't logged by any HTTP server or proxy |
-| Brute force on encryption | XChaCha20-Poly1305 with 256-bit keys. Good luck. |
-| GPU attacks on passwords | Argon2id with 64MB memory cost. Your 4090 weeps. |
-| Drop ID enumeration | 16-char IDs (~2^64) + rate limiting + constant-time 404s |
-| URL bar shoulder surfing | Fragment stripped from URL bar on page load |
-| Browser history forensics | `history.replaceState()` removes the `#key` |
-| Key persisting in RAM | `zeroize` on Rust side, `key = null` on JS side |
-| Key swapped to disk (Unix) | `mlock()` pins key memory pages |
-| Encrypted file recovery | Zero-overwrite before deletion |
-| Clickjacking / iframe embedding | `X-Frame-Options: DENY` + `frame-ancestors 'none'` |
-| XSS injection | Content Security Policy — scripts only from `'self'` |
-| Stale tab leaking key | Auto-expire nukes key from memory when drop expires |
-| IP tracking | `--tor` hides both sender and receiver behind .onion |
-| Late visitor confusion | Burn page — "already downloaded and destroyed" |
+| Server operator reading files | Zero-knowledge. Key never reaches server. The server is basically a glorified USB stick that can't read. |
+| Man-in-the-middle sniffing the key | Key lives in `#fragment`. Never transmitted over HTTP. It's in the URL but not *in* the request. HTTP is weird like that. |
+| Intercepted URL (with `--pw`) | URL has salt, not key. Without password, it's a fancy paperweight. |
+| Network eavesdropping | Application-layer encryption (XChaCha20-Poly1305). Even if someone's watching, they see gibberish. |
+| Server logs leaking the key | Fragments aren't logged by any HTTP server or proxy. It's not a bug, it's a standard. |
+| Brute force on encryption | 256-bit keys. The sun will burn out first. |
+| GPU attacks on passwords | Argon2id with 64MB memory cost. Your RTX 4090 will need therapy. |
+| Drop ID guessing | 16-char IDs (~2^64) + rate limiting + constant-time 404s. Good luck, speedrunner. |
+| Shoulder surfing the URL bar | Fragment stripped on page load. Blink and it's gone. |
+| Browser history forensics | `history.replaceState()` removes the `#key`. What key? |
+| Key stuck in RAM | `zeroize` crate on Rust side, `key = null` on JS side. |
+| Key swapped to disk | `mlock()` on Unix pins key to RAM. Swap file learns nothing. |
+| Encrypted file recovery | Zero-overwrite before deletion. Forensic tools find zeros. |
+| Clickjacking | `X-Frame-Options: DENY`. Try embedding us in an iframe. We dare you. |
+| XSS injection | Content Security Policy locks scripts to `'self'` only. |
+| Stale tab leaking key | Auto-expire nukes key from JS memory when drop expires. |
+| IP tracking | `--tor` hides both sender and receiver behind `.onion`. |
+| Cloudflare seeing your files | They see encrypted bytes. The `#fragment` never leaves your browser. |
 
-**NOT protected against:**
+### What we DON'T protect against
 
-- Someone who has the full URL with the `#key` — for non-password drops, that IS the key. Guard it.
+- Someone who has the full URL with the `#key` — that IS the key. Guard it like your Netflix password (the one you actually don't share).
 - Malware on sender/receiver device (keyloggers, screen capture)
 - Your friend screenshotting the file and posting it on Twitter
-- Rubber hose cryptanalysis (look it up, it's not pretty)
+- Rubber hose cryptanalysis (look it up, it involves neither rubber nor hoses)
 - Time travelers
 - Your mom looking over your shoulder
 
@@ -564,15 +552,17 @@ The critical insight: the `#fragment` in a URL is **never sent to the server**. 
 
 | Component | Choice | Why |
 |---|---|---|
-| Encryption | XChaCha20-Poly1305 | 256-bit, extended nonce, AEAD. Used by WireGuard and Cloudflare. |
-| KDF | Argon2id | Memory-hard, GPU-resistant. 64MB cost, 3 iterations. Winner of Password Hashing Competition. |
-| Browser KDF | Argon2id (WASM) | Same Rust `argon2` crate compiled to WASM — identical params, runs client-side. |
+| Encryption | XChaCha20-Poly1305 | 256-bit, extended nonce, AEAD. If WireGuard trusts it, so can you. |
+| KDF | Argon2id | Memory-hard, GPU-resistant. 64MB cost, 3 iterations. Won the Password Hashing Competition. |
+| Browser KDF | Argon2id (WASM) | Same Rust `argon2` crate compiled to WASM. Same params, runs client-side. What runs on your server runs in their browser. |
 | Chunk size | 64KB | Balances streaming performance vs. auth tag overhead. |
-| Server | Axum (Rust) | Async, zero-copy, no garbage collector. |
-| Rate limiter | tower_governor | Token bucket per IP — stops brute force. |
-| Browser crypto | WebAssembly | Same Rust code compiled to WASM, near-native speed. |
-| Nonce derivation | base XOR chunk_index | Per-chunk unique nonces without storing them. |
-| Binary embedding | rust-embed | HTML, CSS, JS, WASM all baked into the single binary. |
+| Server | Axum (Rust) | Async, zero-copy, no garbage collector. Fast enough to make Go jealous. |
+| Transport | WebSocket P2P + HTTP fallback | P2P for speed, HTTP for reliability. Belt and suspenders. |
+| Tunnel | Cloudflare Quick Tunnel | Free, no account needed, auto-provisioned. Magic. |
+| Rate limiter | tower_governor | Token bucket per IP. Brute-forcers hit a wall. |
+| Browser crypto | WebAssembly | Same Rust code compiled to WASM. Near-native speed in the browser. |
+| Nonce derivation | base XOR chunk_index | Per-chunk unique nonces without storing them. Clever? We think so. |
+| Binary embedding | rust-embed | HTML, JS, WASM all baked into the single binary. No external files to lose. |
 | Memory safety | mlock + zeroize | Key never hits swap, wiped from RAM on drop. |
 | Anonymity | Tor hidden service | `.onion` address via local `tor` daemon. |
 | Archive | tar + flate2 | Folder/multi-file bundling with gzip compression. |
@@ -581,69 +571,71 @@ The critical insight: the `#fragment` in a URL is **never sent to the server**. 
 
 | File Size | Server RAM | Browser RAM | Notes |
 |---|---|---|---|
-| 1 MB | ~5 MB | ~5 MB | Small file, small memory |
+| 1 MB | ~5 MB | ~5 MB | Light as a feather |
 | 100 MB | ~5 MB | ~200 MB | Still comfortable |
 | 1 GB | ~5 MB | ~2 GB | Desktop territory |
-| 10 GB | ~5 MB | Desktop only | Streaming mode — server doesn't care |
+| 10 GB | ~5 MB | Desktop only | Server doesn't care. It streams. |
 
-The server uses constant memory regardless of file size. It streams encrypted chunks from disk. Your 50GB Linux ISO gets the same treatment as a 1KB text file.
+The server uses constant memory regardless of file size. Streams encrypted chunks from disk. Your 50GB Linux ISO gets the same RAM treatment as a 1KB text file. The server is basically a goldfish — it forgets everything immediately.
 
 ## FAQ
 
 **Q: Is this legal?**
-A: It's a file sharing tool with encryption. Like Signal, or HTTPS, or putting a letter in an envelope. What you put inside is your business.
+A: It's a file sharing tool with encryption. Like Signal, or HTTPS, or putting a letter in an envelope. The tool is legal. What you put inside? That's between you and your lawyer.
 
 **Q: Can I use this at work?**
-A: Your IT department will either promote you or fire you. No in-between.
+A: Your IT department will either promote you or fire you. Possibly both. In that order.
 
 **Q: Why not just use Google Drive?**
-A: Google Drive knows your files. Deadrop doesn't. That's the whole point. Also, Google Drive doesn't self-destruct. Boring.
+A: Google Drive knows your files, indexes them, probably shows them to an AI model for "training purposes." Deadrop doesn't know your files exist. Also, Google Drive doesn't self-destruct. Boring.
 
 **Q: What happens if I lose the URL?**
-A: The file is gone forever. That's the feature, not a bug.
+A: The file is gone forever. That's not a bug, that's the whole personality of this tool.
 
 **Q: Can the server see my files?**
-A: No. The encryption key is in the URL fragment which never reaches the server. The server holds meaningless encrypted bytes.
+A: No. The encryption key is in the URL fragment which never reaches the server. The server holds meaningless encrypted bytes and existential dread.
 
 **Q: What about password-protected drops?**
-A: Even better. The URL only has the salt — the server never sees the password or the key. The receiver's browser derives the key locally via Argon2id in WASM. True zero-knowledge.
+A: Even better. The URL only has the salt. The server never sees the password or the key. The receiver's browser derives the key locally via Argon2id in WASM. The server is so uninvolved it might as well not exist.
 
 **Q: What if someone intercepts my password drop URL?**
-A: Without the password, the URL is useless. It only contains a random salt. They'd need to brute-force Argon2id with 64MB memory per guess. Good luck with that.
+A: Without the password, the URL is a random string pointing to gibberish. They'd need to brute-force Argon2id at 64MB per guess. Their electricity bill would be more interesting than the result.
+
+**Q: What about the Cloudflare tunnel? Can Cloudflare see my stuff?**
+A: Cloudflare routes encrypted bytes. The decryption key is in the `#fragment` which never leaves the browser — not to Cloudflare, not to the server, not to anyone. Cloudflare is basically a bouncer who can't open the briefcase.
+
+**Q: What if P2P WebSocket fails?**
+A: HTTP fallback kicks in automatically. The switch is seamless. You won't even notice. We spent an unreasonable amount of time making sure of that.
 
 **Q: What if someone else tries the link?**
-A: They can't. IP pinning locks the download to the first device that connects. Everyone else gets a 403.
-
-**Q: What if I visit a dead link?**
-A: Already downloaded? "This drop was already downloaded and destroyed." Expired? "Drop not found." Either way, it's gone.
+A: IP pinning locks the download to the first device that connects. Everyone else gets a 403 and a lesson in being too slow.
 
 **Q: Why does `--tor` take so long?**
-A: Tor needs about 30-60 seconds to generate a `.onion` address and establish circuits through 3 relays. Good anonymity takes time.
+A: Tor needs 30-60 seconds to generate a `.onion` address and build circuits through 3 relays. Anonymity is a marathon, not a sprint.
 
 **Q: Can I send multiple files?**
-A: Yes. `ded file1.txt file2.pdf folder/` bundles everything into one encrypted `.tar.gz` archive automatically.
-
-**Q: Can I pipe from stdin?**
-A: `echo "the password is swordfish" | ded -` — works great. Serves it as `clipboard.txt`.
+A: `ded file1.txt file2.pdf folder/` — bundles everything into one encrypted `.tar.gz`. One link, many files, zero drama.
 
 **Q: Why Rust?**
-A: Fast, safe, zero runtime dependencies. Also because fighting the borrow checker at 3 AM builds character.
+A: Fast, safe, single binary, zero runtime dependencies. Also because fighting the borrow checker at 3 AM builds character. And trust issues. Mostly trust issues.
 
 ## Contributing
 
-PRs welcome. Here's what's done and what's next:
+PRs welcome. Here's the current state of things:
 
 - [x] End-to-end encryption (XChaCha20-Poly1305)
 - [x] QR code generation
 - [x] Self-destruct by time & download count
 - [x] IP pinning
 - [x] Folder support (.tar.gz)
-- [x] `ded receive` mode (phone → PC)
+- [x] `ded receive` mode (phone to PC)
 - [x] Multi-file drops
 - [x] Stdin / clipboard mode
 - [x] Tor hidden service
 - [x] Password protection (Argon2id)
 - [x] In-browser password prompt with client-side Argon2id
+- [x] Cloudflare tunnel (auto-provisioned, zero config)
+- [x] WebSocket P2P download with HTTP fallback
 - [ ] Receiver-side streaming decryption for large files on mobile
 - [ ] Web UI drag-and-drop improvements
 - [ ] Resume interrupted downloads
@@ -651,17 +643,17 @@ PRs welcome. Here's what's done and what's next:
 
 ## Star History
 
-If you've read this far, you're legally obligated to star the repo. It's in the fine print.
+If you've read this far, you're contractually obligated to star the repo. It's in the fine print. Our lawyers (we don't have lawyers) will be in touch.
 
-**[Star this repo](https://github.com/Karmanya03/Deadrop)** — it makes the self-destruct mechanism work better. (Not really, but it makes me happy.)
+**[Star this repo](https://github.com/Karmanya03/Deadrop)** — every star makes the self-destruct mechanism 0.001% faster. (Citation needed.)
 
 ## License
 
-MIT — do whatever you want. Just don't blame me if your dead drop gets intercepted by actual spies.
+MIT — do whatever you want. Just don't blame us when your dead drop works exactly as intended and the file vanishes forever. That's the point.
 
 ---
 
 <p align="center">
-  <sub>Built with Rust and an unreasonable amount of paranoia.</sub><br/>
+  <sub>Built with Rust, Cloudflare tunnels, and an unreasonable amount of paranoia.</sub><br/>
   <sub>Remember: just because you're paranoid doesn't mean they're not after your files.</sub>
 </p>

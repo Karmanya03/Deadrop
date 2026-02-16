@@ -12,6 +12,9 @@ use zeroize::Zeroize;
 pub const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
 const AUTH_TAG_SIZE: usize = 16;
 
+/// Maximum length for display filenames (prevents UI/path issues)
+const MAX_FILENAME_LEN: usize = 100;
+
 #[derive(Clone)]
 pub struct EncryptionKey(pub [u8; 32]);
 
@@ -49,20 +52,17 @@ impl EncryptionKey {
     ///
     /// Params: Argon2id v0x13, m=65536 (64 MB), t=3, p=1, output=32 bytes
     ///
-    /// ⚠️  p=1 (not p=4) because the browser-side WASM runs single-threaded.
-    ///     Both sides MUST use identical params or decryption will fail.
+    /// ⚠️ p=1 (not p=4) because the browser-side WASM runs single-threaded.
+    /// Both sides MUST use identical params or decryption will fail.
     pub fn from_password(password: &str, salt: &[u8; 16]) -> anyhow::Result<Self> {
         use argon2::{Algorithm, Argon2, Params, Version};
-
         let params = Params::new(65536, 3, 1, Some(32))
             .map_err(|e| anyhow::anyhow!("Argon2 params error: {}", e))?;
         let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-
         let mut key = [0u8; 32];
         argon2
             .hash_password_into(password.as_bytes(), salt, &mut key)
             .map_err(|e| anyhow::anyhow!("Argon2 hash error: {}", e))?;
-
         let k = Self(key);
         k.lock_memory();
         Ok(k)
@@ -112,6 +112,96 @@ impl EncryptionKey {
         Ok(k)
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FIX: Safe filename handling — truncates long names, sanitizes bad chars
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Sanitize and truncate a filename to prevent path-length issues on Windows
+/// and display problems in the browser UI.
+///
+/// - Strips path traversal characters (`..`, `/`, `\`)
+/// - Truncates to MAX_FILENAME_LEN chars while preserving extension
+/// - Falls back to "file" / "archive.tar.gz" if name is empty
+pub fn safe_filename(name: &str, is_archive: bool) -> String {
+    // Strip dangerous characters
+    let sanitized: String = name
+        .replace("..", "")
+        .replace('/', "")
+        .replace(std::path::MAIN_SEPARATOR, "")
+        .trim()
+        .to_string();
+
+    if sanitized.is_empty() {
+        return if is_archive {
+            "archive.tar.gz".to_string()
+        } else {
+            "file".to_string()
+        };
+    }
+
+    // If short enough, return as-is
+    if sanitized.len() <= MAX_FILENAME_LEN {
+        return sanitized;
+    }
+
+    // Truncate while preserving extension
+    let path = Path::new(&sanitized);
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+
+    // Handle double extensions like .tar.gz
+    let full_ext = if sanitized.ends_with(".tar.gz") {
+        "tar.gz"
+    } else if sanitized.ends_with(".tar.xz") {
+        "tar.xz"
+    } else if sanitized.ends_with(".tar.bz2") {
+        "tar.bz2"
+    } else {
+        ext
+    };
+
+    let ext_with_dot = if full_ext.is_empty() {
+        String::new()
+    } else {
+        format!(".{}", full_ext)
+    };
+
+    // Calculate how many chars we can keep for the stem
+    let max_stem = MAX_FILENAME_LEN.saturating_sub(ext_with_dot.len() + 1); // +1 for safety
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("file");
+
+    // For .tar.gz, file_stem returns "name.tar", so strip that too
+    let stem = stem.strip_suffix(".tar").unwrap_or(stem);
+
+    if stem.len() > max_stem {
+        format!("{}{}", &stem[..max_stem], ext_with_dot)
+    } else {
+        format!("{}{}", stem, ext_with_dot)
+    }
+}
+
+/// Extract a safe filename from a path, with fallback
+pub fn safe_filename_from_path(path: &Path, is_archive: bool) -> String {
+    let raw = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| {
+            if is_archive {
+                "archive.tar.gz".to_string()
+            } else {
+                "file".to_string()
+            }
+        });
+    safe_filename(&raw, is_archive)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 
 /// Header written before encrypted data
 #[derive(Debug)]
@@ -172,9 +262,12 @@ pub fn encrypt_file_to_disk(
     let nonce = *chachapoly1305_nonce_from_slice(&nonce_bytes);
 
     // Create temp file for encrypted output
+    // NOTE: tempfile::NamedTempFile::new() already uses short random names
+    // like /tmp/.tmpXXXXXX, so this is safe on Windows (no long path issue)
     let temp_file = tempfile::NamedTempFile::new()?;
     let (file, temp_path) = temp_file.keep()
         .map_err(|e| anyhow::anyhow!("Failed to persist temp file: {}", e))?;
+
     let mut writer = BufWriter::with_capacity(CHUNK_SIZE * 2, file);
 
     // Write placeholder header (we'll update chunk count after)
@@ -210,6 +303,7 @@ pub fn encrypt_file_to_disk(
     // Seek back and write the real header with actual chunk count
     let mut file = writer.into_inner()?;
     file.seek(SeekFrom::Start(0))?;
+
     let header = EncryptedHeader {
         nonce: nonce.into(),
         total_chunks: chunk_index,
@@ -245,6 +339,7 @@ pub fn encrypt_file_streaming(
     let estimated_size = file_size as usize
         + (file_size as usize / CHUNK_SIZE + 1) * (AUTH_TAG_SIZE + 4)
         + EncryptedHeader::SIZE;
+
     let mut ciphertext = Vec::with_capacity(estimated_size);
     ciphertext.extend_from_slice(&[0u8; EncryptedHeader::SIZE]);
 
