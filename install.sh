@@ -1,8 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # deadrop installer — detects OS/arch, downloads the right binary, adds to PATH
 # Usage: curl -fsSL https://raw.githubusercontent.com/Karmanya03/Deadrop/main/install.sh | bash
 
-set -e
+set -euo pipefail
 
 # ─── Colors ───
 RED='\033[0;31m'
@@ -71,7 +71,7 @@ TMPDIR="$(mktemp -d)"
 TMPFILE="${TMPDIR}/${BINARY}"
 
 if command -v curl &> /dev/null; then
-    HTTP_CODE=$(curl -fSL -w '%{http_code}' -o "$TMPFILE" "$DOWNLOAD_URL" 2>/dev/null) || true
+    HTTP_CODE=$(curl -fSL -w '%{http_code}' -o "$TMPFILE" "$DOWNLOAD_URL" 2>/dev/null || true)
 elif command -v wget &> /dev/null; then
     wget -q -O "$TMPFILE" "$DOWNLOAD_URL" 2>/dev/null && HTTP_CODE="200" || HTTP_CODE="404"
 else
