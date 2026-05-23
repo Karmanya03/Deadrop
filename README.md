@@ -27,6 +27,9 @@
 
 ---
 
+
+
+
 ## What is this?
 
 Remember in spy movies when someone leaves a briefcase under a park bench, and someone else picks it up later? That's a dead drop.
@@ -561,6 +564,9 @@ Run one at a time — each starts a server. Ctrl+C to stop, then try the next.
 | Tunnel | Cloudflare Quick Tunnel | Free, no account needed, auto-provisioned. Magic. |
 | Rate limiter | tower_governor | Token bucket per IP. Brute-forcers hit a wall. |
 | Browser crypto | WebAssembly | Same Rust code compiled to WASM. Near-native speed in the browser. |
+| Resume | IndexedDB (worker) | Receiver-side worker saves the last successfully decrypted chunk index in `deadrop-resume` (IndexedDB) so interrupted downloads can resume. |
+| Multi-recipient | Ephemeral X25519 envelopes | Server generates per-recipient ephemeral pubkeys and encrypted CEKs; the browser performs ECDH (WebCrypto where available) to unwrap the CEK and WASM decrypts the chunks. |
+| WASM package | wasm/pkg | Client-side Argon2id and chunk-decrypt glue is built into `wasm/pkg`. Build with `wasm-pack build --target web --out-dir wasm/pkg`. |
 | Nonce derivation | base XOR chunk_index | Per-chunk unique nonces without storing them. Clever? We think so. |
 | Binary embedding | rust-embed | HTML, JS, WASM all baked into the single binary. No external files to lose. |
 | Memory safety | mlock + zeroize | Key never hits swap, wiped from RAM on drop. |
@@ -604,6 +610,22 @@ A: Without the password, the URL is a random string pointing to gibberish. They'
 **Q: What about the Cloudflare tunnel? Can Cloudflare see my stuff?**
 A: Cloudflare routes encrypted bytes. The decryption key is in the `#fragment` which never leaves the browser — not to Cloudflare, not to the server, not to anyone. Cloudflare is basically a bouncer who can't open the briefcase.
 
+**Q: How do multi-recipient drops work?**
+A: When you provide recipient public keys at send-time, the server generates an ephemeral X25519 keypair per recipient, computes an ECDH shared secret, derives a symmetric envelope key (SHA-256 of the shared secret), encrypts the CEK (content encryption key) with that envelope key using XChaCha20-Poly1305, and stores the ephemeral pub + encrypted CEK for each recipient. The server never knows recipient private keys. The receiver computes ECDH locally (we use browser WebCrypto where available), calls into WASM to decrypt the envelope, obtains the CEK, and then decrypts the file stream chunk-by-chunk.
+
+**Q: Can I resume interrupted downloads?**
+A: Yes. The download worker stores the last successfully decrypted chunk index in IndexedDB (`deadrop-resume`). If a download is interrupted, reopening the same link will resume from the last saved chunk. If your browser does not support the File System Access API, Deadrop falls back to assembling a Blob and downloading when the transfer completes.
+
+**Q: Is ECDH done in WASM or in WebCrypto?**
+A: At the moment the browser performs X25519 ECDH using WebCrypto when available (fast and native). The WASM module handles envelope decryption and chunk decryption. We attempted to include a pure-WASM X25519 implementation, but dependency conflicts blocked a clean integration; we may revisit this in a later release. WebCrypto provides equivalent security and runs in all modern browsers (with some caveats for older Safari versions).
+
+**Q: Will this release work right away if I publish it?**
+A: Yes — the repository builds (`cargo build`), tests run (`cargo test`), and the WASM package can be generated with `wasm-pack build --target web --out-dir wasm/pkg`. Practical caveats:
+
+- Browser compatibility: WebCrypto X25519 derives are required for multi-recipient unwrap; most modern Chromium and Firefox support it. Safari support may lag — in that case the user may need to provide the CEK manually or use a supported browser.
+- File System Access API: used to stream-write files on supported browsers (Chrome/Edge/Chromium-based Android). Fallback to Blob download is available everywhere.
+- Always test an end-to-end drop (send → open link → decrypt) on your target browsers before pushing to production.
+
 **Q: What if P2P WebSocket fails?**
 A: HTTP fallback kicks in automatically. The switch is seamless. You won't even notice. We spent an unreasonable amount of time making sure of that.
 
@@ -636,10 +658,10 @@ PRs welcome. Here's the current state of things:
 - [x] In-browser password prompt with client-side Argon2id
 - [x] Cloudflare tunnel (auto-provisioned, zero config)
 - [x] WebSocket P2P download with HTTP fallback
-- [ ] Receiver-side streaming decryption for large files on mobile
-- [ ] Web UI drag-and-drop improvements
-- [ ] Resume interrupted downloads
-- [ ] Multi-recipient drops (different keys per recipient)
+- [x] Receiver-side streaming decryption for large files on mobile
+- [x] Web UI drag-and-drop improvements
+- [x] Resume interrupted downloads
+- [x] Multi-recipient drops (different keys per recipient)
 
 ## Star History
 
