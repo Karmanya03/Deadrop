@@ -45,6 +45,7 @@ fn test_config_duration_parsing() {
         None,
         "0.0.0.0".to_string(),
         false,
+        Vec::new(),
     ).unwrap();
     assert_eq!(config.expiry_duration, chrono::Duration::minutes(30));
 }

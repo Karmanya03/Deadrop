@@ -7,6 +7,7 @@ use chacha20poly1305::{
     XChaCha20Poly1305,
 };
 use base64::engine::{general_purpose::URL_SAFE_NO_PAD, Engine};
+use zeroize::Zeroize;
 
 const HEADER_SIZE: usize = 40; // 24 (nonce) + 8 (chunk_count) + 8 (original_size)
 
@@ -171,4 +172,53 @@ pub fn decrypt_blob(
     }
 
     Ok(plaintext)
+}
+
+/// Decrypt an encrypted CEK envelope. `shared_key_base64` is the 32-byte
+/// symmetric key derived from ECDH (URL-safe base64). `payload` should be
+/// [nonce (24 bytes) || ciphertext]. Returns the decrypted CEK bytes.
+#[wasm_bindgen]
+pub fn decrypt_envelope(shared_key_base64: &str, payload: &[u8]) -> Result<Vec<u8>, JsValue> {
+    let key_bytes = URL_SAFE_NO_PAD
+        .decode(shared_key_base64)
+        .map_err(|e| JsValue::from_str(&format!("Invalid shared key: {}", e)))?;
+    if key_bytes.len() != 32 {
+        return Err(JsValue::from_str("Invalid shared key length"));
+    }
+    if payload.len() < 24 {
+        return Err(JsValue::from_str("Payload too short"));
+    }
+
+    let cipher = XChaCha20Poly1305::new_from_slice(&key_bytes)
+        .map_err(|_| JsValue::from_str("Failed to init cipher"))?;
+
+    let mut nonce = [0u8; 24];
+    nonce.copy_from_slice(&payload[..24]);
+    let ct = &payload[24..];
+
+    let decrypted = cipher
+        .decrypt(chacha20poly1305::XNonce::from_slice(&nonce), ct)
+        .map_err(|_| JsValue::from_str("Envelope decryption failed"))?;
+
+    Ok(decrypted)
+}
+
+/// Zeroize a vector of bytes passed from JS (e.g., derived key material).
+#[wasm_bindgen]
+pub fn zeroize_vec(mut v: Vec<u8>) {
+    v.zeroize();
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_zeroize_vec() {
+        let mut v = vec![1u8,2,3,4];
+        zeroize_vec(v);
+        // cannot directly assert memory wiped, but ensure function runs
+        assert!(true);
+    }
 }

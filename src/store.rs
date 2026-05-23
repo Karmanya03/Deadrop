@@ -10,6 +10,8 @@ pub struct Drop {
     pub encrypted_path: Option<PathBuf>,   // Some = disk-backed, None = in-memory
     pub ciphertext: Option<Vec<u8>>,       // Some = in-memory, None = disk-backed
     pub encrypted_size: u64,               // Total size of encrypted data
+    pub total_chunks: u64,                 // Number of encrypted chunks (for streaming/resume)
+    pub recipient_envelopes: Vec<RecipientEnvelope>, // per-recipient CEK envelopes (base64)
     pub filename: String,
     pub mime_type: String,
     pub file_size: u64,
@@ -19,6 +21,13 @@ pub struct Drop {
     pub download_count: AtomicU32,
     pub has_password: bool,
     pub pinned_ip: Mutex<Option<String>>,  // IP pinning: first downloader gets locked
+}
+
+#[derive(Clone)]
+pub struct RecipientEnvelope {
+    pub recipient_id: String,
+    pub ephemeral_pub_b64: String,
+    pub encrypted_cek_b64: String,
 }
 
 impl std::ops::Drop for Drop {

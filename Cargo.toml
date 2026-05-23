@@ -1,6 +1,6 @@
 [package]
 name = "deadrop"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 description = "Zero-knowledge encrypted dead drop. One binary. One command. Gone."
 license = "MIT"
@@ -26,9 +26,9 @@ path = "src/main.rs"
 [dependencies]
 urlencoding = "2"
 # Web server
-axum = { version = "0.8", features = ["multipart", "ws"] }
-tokio = { version = "1", features = ["full"] }
-futures-util = "0.3"
+axum = { version = "0.8.9", features = ["multipart", "ws"] }
+tokio = { version = "1.52.3", features = ["full"] }
+futures-util = "0.3.32"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "limit", "compression-full", "set-header"] }
 tower_governor = { version = "0.8", features = ["axum"] }
@@ -36,42 +36,47 @@ tower_governor = { version = "0.8", features = ["axum"] }
 
 # Crypto
 chacha20poly1305 = "0.10"
-rand = "0.10"
+rand = "0.10.1"
 zeroize = { version = "1.8", features = ["derive"] }
 base64 = "0.22"
 argon2 = "0.5"
-tar = "0.4"
+tar = "0.4.46"
 flate2 = "1"
 tokio-util = { version = "0.7", features = ["io"] }
-tempfile = "3"
+tempfile = "3.27.0"
+
+# Multi-recipient key agreement
+ring = "0.17.14"
+sha2 = "0.11.0"
+getrandom = "0.4.2"
 
 # CLI
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 indicatif = "0.18"
-console = "0.16"
+console = "0.16.3"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 dirs = "6"
 # QR code
 qrcode = "0.14"
 
 # Utils
-uuid = { version = "1", features = ["v4"] }
-chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.23.1", features = ["v4"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = "1.0.150"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 mime_guess = "2"
 rust-embed = "8"
-dashmap = "6"
+dashmap = "6.2.1"
 bytesize = "2"
-anyhow = "1"
+anyhow = "1.0.102"
 colored = "3"
-local-ip-address = "0.6"
+local-ip-address = "0.6.13"
 
 # Platform-specific: memory locking
 [target.'cfg(unix)'.dependencies]
-libc = "0.2"
+libc = "0.2.186"
 
 [profile.release]
 opt-level = 3

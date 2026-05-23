@@ -11,6 +11,7 @@ pub struct DropConfig {
     pub password: Option<String>,
     pub bind: String,
     pub no_qr: bool,
+    pub recipients: Vec<String>,
 }
 
 impl DropConfig {
@@ -22,6 +23,7 @@ impl DropConfig {
         password: Option<String>,
         bind: String,
         no_qr: bool,
+        recipients: Vec<String>,
     ) -> Result<Self> {
         if !file.exists() {
             return Err(anyhow!("Path not found: {}", file.display()));
@@ -38,6 +40,7 @@ impl DropConfig {
             password,
             bind,
             no_qr,
+            recipients,
         })
     }
 }

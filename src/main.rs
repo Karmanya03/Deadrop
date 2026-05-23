@@ -66,6 +66,9 @@ struct SendArgs {
     /// Disable Cloudflare tunnel (local network only)
     #[arg(long)]
     no_tunnel: bool,
+    /// Recipient public keys (URL-safe base64 X25519 32-byte public keys). Repeatable.
+    #[arg(long = "recipient")]
+    recipients: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -205,6 +208,7 @@ async fn main() -> anyhow::Result<()> {
                 args.password,
                 args.bind,
                 args.no_qr,
+                args.recipients.clone(),
             )?;
 
             // ── Optional Tor hidden service ──

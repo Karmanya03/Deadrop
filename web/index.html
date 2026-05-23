@@ -281,6 +281,17 @@
                 });
             }
 
+            // If recipient envelopes exist, show recipient key input
+            if (meta.recipient_envelopes && meta.recipient_envelopes.length > 0) {
+                const recSection = document.createElement('div');
+                recSection.style.marginTop = '1rem';
+                recSection.innerHTML = `
+                    <div class="pw-label">🔐 Recipient key</div>
+                    <input type="text" id="recipient-priv-input" class="pw-input" placeholder="Enter your recipient private key (URL-safe base64)" />
+                `;
+                document.querySelector('.file-info').appendChild(recSection);
+            }
+
             if (meta.expires_at) {
                 setupExpiryWatcher(new Date(meta.expires_at));
             }
@@ -313,7 +324,35 @@
             }
         }
 
-        /* ── Download: WebSocket P2P primary, HTTP fallback ── */
+        /* ── Helper: derive shared key using WebCrypto (X25519) ── */
+        async function deriveSharedKeyWebCrypto(ephemeralPubB64, recipientPrivB64) {
+            // Convert URL-safe base64 to Uint8Array
+            function urlBase64ToBytes(s) {
+                s = s.replace(/-/g, '+').replace(/_/g, '/');
+                while (s.length % 4) s += '=';
+                return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+            }
+            const ephBytes = urlBase64ToBytes(ephemeralPubB64);
+            const privBytes = urlBase64ToBytes(recipientPrivB64);
+
+            if (!window.crypto || !window.crypto.subtle) throw new Error('WebCrypto not available');
+
+            // Import keys and derive
+            try {
+                const privKey = await crypto.subtle.importKey('raw', privBytes.buffer, { name: 'X25519' }, false, ['deriveBits']);
+                const pubKey = await crypto.subtle.importKey('raw', ephBytes.buffer, { name: 'X25519' }, false, []);
+                const shared = await crypto.subtle.deriveBits({ name: 'X25519', public: pubKey }, privKey, 256);
+                const hash = await crypto.subtle.digest('SHA-256', shared);
+                const hashBytes = new Uint8Array(hash);
+                // Encode URL-safe base64
+                const b64 = btoa(String.fromCharCode(...hashBytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+                return b64;
+            } catch (e) {
+                throw new Error('X25519 derive failed: ' + e.message);
+            }
+        }
+
+        /* ── Download: streaming worker + fallback ── */
         async function startDownload() {
             if (!encryptionKey) {
                 showError('No encryption key available.');
@@ -331,75 +370,188 @@
             progressSection.style.display = 'block';
 
             try {
-                let encrypted;
-                let viaP2P = false;
+                // Prefer chunked streaming API when available (resume + low memory)
+                const chunksResp = await fetch(`/api/chunks/${dropId}`);
+                if (chunksResp.ok) {
+                    const chunksMeta = await chunksResp.json();
 
-                // Try WebSocket P2P first
-                try {
-                    progressText.textContent = '⚡ Connecting P2P...';
-                    encrypted = await downloadViaWS(progressFill, progressText);
-                    viaP2P = true;
-                } catch (wsErr) {
-                    console.log('P2P unavailable, using HTTP:', wsErr.message);
-                    encrypted = await downloadViaHTTP(progressFill, progressText);
-                }
-
-                // Decrypt — yield to browser so UI updates before heavy WASM work
-                progressFill.style.width = '100%';
-                progressText.textContent = viaP2P
-                    ? '🔓 Decrypting P2P transfer...'
-                    : '🔓 Decrypting...';
-
-                // Let the browser repaint before blocking on WASM decrypt
-                await new Promise(r => setTimeout(r, 100));
-
-                let decrypted;
-                try {
-                    decrypted = wasmModule.decrypt_blob(encrypted, encryptionKey);
-                } catch (e) {
-                    if (isPasswordDrop) {
-                        throw new Error('Decryption failed — wrong password? The key didn\'t match.');
+                    // If recipient envelopes present and user provided private key, try to unwrap CEK
+                    if (chunksMeta.recipient_envelopes && chunksMeta.recipient_envelopes.length > 0) {
+                        const recipInput = document.getElementById('recipient-priv-input');
+                        if (recipInput && recipInput.value.trim()) {
+                            const recipPriv = recipInput.value.trim();
+                            // Try each envelope until one decrypts
+                            for (const env of chunksMeta.recipient_envelopes) {
+                                try {
+                                    const shared_b64 = await deriveSharedKeyWebCrypto(env.ephemeral_pub_b64, recipPriv);
+                                    // decrypt envelope via wasm
+                                    const payload = Uint8Array.from(atob(env.encrypted_cek_b64.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+                                    const cek = wasmModule.decrypt_envelope(shared_b64, payload);
+                                    // encode CEK as URL-safe base64 to pass into worker
+                                    const cek_b64 = btoa(String.fromCharCode(...cek)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+                                    encryptionKey = cek_b64;
+                                    // zeroize sensitive arrays
+                                    wasmModule.zeroize_vec(Array.from(cek));
+                                    break;
+                                } catch (e) {
+                                    // try next envelope
+                                    console.warn('Envelope unwrap failed:', e);
+                                }
+                            }
+                        }
                     }
-                    throw new Error('Decryption failed — key mismatch or corrupted data.');
+
+                    const w = new Worker('/download-worker.js', { type: 'module' });
+
+                    // Setup file writer: prefer File System Access API
+                    let fileHandle = null;
+                    let useFs = false;
+                    if ('showSaveFilePicker' in window) {
+                        try {
+                            fileHandle = await window.showSaveFilePicker({
+                                suggestedName: meta.filename || 'deadrop-file',
+                                types: [{ description: 'All Files', accept: { '*/*': ['.*'] } }]
+                            });
+                            useFs = true;
+                        } catch (e) {
+                            // user cancelled save dialog
+                        }
+                    }
+
+                    let writable = null;
+                    let parts = [];
+
+                    if (useFs && fileHandle) {
+                        try {
+                            writable = await fileHandle.createWritable({ keepExistingData: true });
+                        } catch (e) {
+                            // older browsers may not support keepExistingData
+                            writable = await fileHandle.createWritable();
+                        }
+                    }
+
+                    const recipInput = document.getElementById('recipient-priv-input');
+                    const recipientPriv = recipInput ? recipInput.value.trim() : null;
+
+                    w.postMessage({ type: 'start', dropId, key: encryptionKey, filename: meta.filename, recipient_priv: recipientPriv });
+
+                    w.onmessage = async (ev) => {
+                        const m = ev.data;
+                        if (m.type === 'meta') {
+                            progressText.textContent = `Downloading... 0 / ${m.total_chunks}`;
+                        } else if (m.type === 'progress') {
+                            const pct = Math.round((m.index / m.total) * 100);
+                            progressFill.style.width = pct + '%';
+                            progressText.textContent = `Downloading... ${pct}% — ${m.index}/${m.total}`;
+                        } else if (m.type === 'chunk') {
+                            const chunk = m.data;
+                            // Write chunk
+                            if (writable) {
+                                await writable.write(chunk);
+                            } else {
+                                parts.push(chunk);
+                            }
+                        } else if (m.type === 'done') {
+                            if (writable) {
+                                await writable.close();
+                                showSuccess('✅ File streamed and saved!');
+                            } else {
+                                // assemble blob fallback
+                                const blob = new Blob(parts, { type: meta.mime || 'application/octet-stream' });
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = meta.filename || 'deadrop-file';
+                                document.body.appendChild(a);
+                                a.click();
+                                document.body.removeChild(a);
+                                URL.revokeObjectURL(url);
+                                showSuccess('✅ File decrypted and downloaded (fallback)!');
+                            }
+                            progressSection.style.display = 'none';
+                            encryptionKey = null; passwordSalt = null;
+                            w.terminate();
+                        } else if (m.type === 'error') {
+                            w.terminate();
+                            showError(m.message || 'Download worker error');
+                            progressSection.style.display = 'none';
+                        }
+                    };
+                } else {
+                    // Fallback to existing full-download path
+                    const resp = await fetch(`/api/blob/${dropId}`);
+                    if (!resp.ok) {
+                        if (resp.status === 403) throw new Error('Access denied — locked to another device.');
+                        if (resp.status === 404) throw new Error('Drop not found or already destroyed.');
+                        if (resp.status === 410) throw new Error('Drop already downloaded.');
+                        throw new Error('HTTP ' + resp.status);
+                    }
+
+                    const contentLength = parseInt(resp.headers.get('Content-Length') || '0');
+                    const reader = resp.body.getReader();
+                    const chunks = [];
+                    let received = 0;
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        chunks.push(value);
+                        received += value.length;
+
+                        if (contentLength > 0) {
+                            const pct = Math.round((received / contentLength) * 100);
+                            progressFill.style.width = pct + '%';
+                            progressText.textContent = `Downloading... ${pct}% — ${formatBytes(received)} / ${formatBytes(contentLength)}`;
+                        }
+                    }
+
+                    const encrypted = new Uint8Array(received);
+                    let offset = 0;
+                    for (const chunk of chunks) {
+                        encrypted.set(chunk, offset);
+                        offset += chunk.length;
+                    }
+
+                    // Decrypt — yield to browser so UI updates before heavy WASM work
+                    progressFill.style.width = '100%';
+                    progressText.textContent = '🔓 Decrypting...';
+
+                    await new Promise(r => setTimeout(r, 100));
+
+                    let decrypted;
+                    try {
+                        decrypted = wasmModule.decrypt_blob(encrypted, encryptionKey);
+                    } catch (e) {
+                        if (isPasswordDrop) {
+                            throw new Error('Decryption failed — wrong password? The key didn\'t match.');
+                        }
+                        throw new Error('Decryption failed — key mismatch or corrupted data.');
+                    }
+
+                    // Free encrypted data from memory immediately after decryption
+                    // Save file
+                    progressText.textContent = 'Saving file...';
+                    const blob = new Blob([decrypted], { type: meta.mime || 'application/octet-stream' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = meta.filename || 'deadrop-file';
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+
+                    showSuccess('✅ File decrypted and downloaded!');
+                    progressSection.style.display = 'none';
+
+                    // Wipe keys from memory
+                    encryptionKey = null;
+                    passwordSalt = null;
                 }
-
-                // Free encrypted data from memory immediately after decryption
-                encrypted = null;
-
-                // Save file
-                progressText.textContent = 'Saving file...';
-                const blob = new Blob([decrypted], { type: meta.mime || 'application/octet-stream' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = meta.filename || 'deadrop-file';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-
-                showSuccess(viaP2P
-                    ? '✅ Downloaded via P2P — zero relay!'
-                    : '✅ File decrypted and downloaded!');
-                progressSection.style.display = 'none';
-
-                // Wipe keys from memory
-                encryptionKey = null;
-                passwordSalt = null;
-
             } catch (e) {
                 console.error('Download failed:', e);
                 progressSection.style.display = 'none';
-
-                if (isPasswordDrop && e.message.includes('wrong password')) {
-                    const btnRetry = document.getElementById('btn-unlock');
-                    btnRetry.disabled = false;
-                    btnRetry.textContent = '🔓 Unlock & Download';
-                    encryptionKey = null;
-                    document.getElementById('pw-input').value = '';
-                    document.getElementById('pw-input').focus();
-                }
-                showError(e.message);
+                showError(e.message || String(e));
             }
         }
 
@@ -471,61 +623,6 @@
                     if (!gotData) reject(new Error('P2P closed early'));
                 };
             });
-        }
-
-        /* ── HTTP fallback download ── */
-        async function downloadViaHTTP(progressFill, progressText) {
-            progressText.textContent = 'Downloading encrypted blob...';
-            const resp = await fetch(`/api/blob/${dropId}`);
-
-            if (!resp.ok) {
-                if (resp.status === 403) throw new Error('Access denied — locked to another device.');
-                if (resp.status === 404) throw new Error('Drop not found or already destroyed.');
-                if (resp.status === 410) throw new Error('Drop already downloaded.');
-                throw new Error('HTTP ' + resp.status);
-            }
-
-            const contentLength = parseInt(resp.headers.get('Content-Length') || '0');
-            const reader = resp.body.getReader();
-            const chunks = [];
-            let received = 0;
-
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) break;
-                chunks.push(value);
-                received += value.length;
-
-                if (contentLength > 0) {
-                    const pct = Math.round((received / contentLength) * 100);
-                    progressFill.style.width = pct + '%';
-                    progressText.textContent = `Downloading... ${pct}% — ${formatBytes(received)} / ${formatBytes(contentLength)}`;
-                }
-            }
-
-            const encrypted = new Uint8Array(received);
-            let offset = 0;
-            for (const chunk of chunks) {
-                encrypted.set(chunk, offset);
-                offset += chunk.length;
-            }
-            return encrypted;
-        }
-
-        /* ── Expiry watcher ── */
-        function setupExpiryWatcher(expiresAt) {
-            const check = () => {
-                if (new Date() > expiresAt) {
-                    encryptionKey = null;
-                    passwordSalt = null;
-                    document.getElementById('main').classList.add('hidden');
-                    document.getElementById('notfound').classList.remove('hidden');
-                    document.querySelector('#notfound .burned-title').textContent = 'This drop has expired';
-                    document.querySelector('#notfound .burned-sub').textContent =
-                        'The encryption key has been wiped from memory.';
-                }
-            };
-            setInterval(check, 5000);
         }
 
         /* ── Helpers ── */

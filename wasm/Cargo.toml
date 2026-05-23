@@ -15,6 +15,10 @@ web-sys = { version = "0.3", features = ["console"] }
 base64 = "0.22"
 argon2 = "0.5"
 
+zeroize = "1.3"
+
+# X25519 ECDH support for deriving shared symmetric keys in WASM
+
 # argon2 pulls getrandom 0.2.x via password-hash → rand_core.
 # On wasm32-unknown-unknown, getrandom 0.2.x needs the "js" feature.
 [dependencies.getrandom_02]
