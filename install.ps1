@@ -3,6 +3,16 @@
 
 $ErrorActionPreference = "Stop"
 
+# Best effort TLS hardening for Windows PowerShell 5.1 hosts.
+try {
+    [Net.ServicePointManager]::SecurityProtocol =
+        [Net.SecurityProtocolType]::Tls12 -bor
+        [Net.SecurityProtocolType]::Tls11 -bor
+        [Net.SecurityProtocolType]::Tls
+} catch {
+    # Ignore if unavailable (PowerShell 7+ doesn't rely on ServicePointManager here)
+}
+
 function Invoke-DeadropInstall {
     $repo = "Karmanya03/Deadrop"
     $binary = "ded"
@@ -42,11 +52,36 @@ function Invoke-DeadropInstall {
         $iwrParams["UseBasicParsing"] = $true
     }
 
-    try {
-        Invoke-WebRequest @iwrParams
-    } catch {
+    $downloadOk = $false
+    $lastErr = $null
+
+    # Retry a few times for transient TLS/proxy/CDN resets.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            Invoke-WebRequest @iwrParams
+            $downloadOk = $true
+            break
+        } catch {
+            $lastErr = $_.Exception.Message
+            Start-Sleep -Seconds (1 * $attempt)
+        }
+    }
+
+    # Fallback to curl.exe if IWR keeps failing.
+    if (-not $downloadOk -and (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
+        try {
+            & curl.exe -fL --retry 3 --retry-delay 1 --connect-timeout 20 -o $tmpPath $downloadUrl | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $downloadOk = $true
+            }
+        } catch {
+            $lastErr = $_.Exception.Message
+        }
+    }
+
+    if (-not $downloadOk) {
         if (Test-Path $tmpPath) { Remove-Item -Force $tmpPath -ErrorAction SilentlyContinue }
-        throw "Download failed. Release may not exist yet. Check: https://github.com/$repo/releases`n$($_.Exception.Message)"
+        throw "Download failed. Release exists, but network/TLS/proxy interrupted the transfer. Try again.\nRelease: https://github.com/$repo/releases/latest\nError: $lastErr"
     }
 
     if (!(Test-Path $tmpPath) -or (Get-Item $tmpPath).Length -eq 0) {
