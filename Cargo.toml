@@ -1,6 +1,6 @@
 [package]
 name = "deadrop"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
 description = "Zero-knowledge encrypted dead drop. One binary. One command. Gone."
 license = "MIT"
@@ -35,9 +35,9 @@ tower_governor = { version = "0.8", features = ["axum"] }
 
 
 # Crypto
-chacha20poly1305 = "0.10"
-rand = "0.10.1"
-zeroize = { version = "1.8", features = ["derive"] }
+chacha20poly1305 = "0.11.0"
+rand = "0.10.2"
+zeroize = { version = "1.9.0", features = ["derive"] }
 base64 = "0.22"
 argon2 = "0.5"
 tar = "0.4.46"
@@ -48,20 +48,20 @@ tempfile = "3.27.0"
 # Multi-recipient key agreement
 ring = "0.17.14"
 sha2 = "0.11.0"
-getrandom = "0.4.2"
+getrandom = "0.4.3"
 
 # CLI
 clap = { version = "4.6.1", features = ["derive"] }
-indicatif = "0.18"
-console = "0.16.3"
+indicatif = "0.18.6"
+console = "0.16.4"
 reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
 dirs = "6"
 # QR code
 qrcode = "0.14"
 
 # Utils
-uuid = { version = "1.23.1", features = ["v4"] }
-chrono = { version = "0.4.44", features = ["serde"] }
+uuid = { version = "1.23.4", features = ["v4"] }
+chrono = { version = "0.4.45", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.150"
 tracing = "0.1"
@@ -69,8 +69,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 mime_guess = "2"
 rust-embed = "8"
 dashmap = "6.2.1"
-bytesize = "2"
-anyhow = "1.0.102"
+bytesize = "2.4.2"
+anyhow = "1.0.103"
 colored = "3"
 local-ip-address = "0.6.13"
 

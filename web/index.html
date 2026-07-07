@@ -190,8 +190,12 @@
 
         /* ── Init ── */
         (async function init() {
-            const pathParts = window.location.pathname.split('/');
-            dropId = pathParts[pathParts.length - 1] || pathParts[pathParts.length - 2];
+            const dropIdMatch = window.location.pathname.match(/\/d\/([^/]+)\/?$/);
+            if (!dropIdMatch) {
+                showError('Invalid download link. Open the /d/<id> route from a shared drop URL.');
+                return;
+            }
+            dropId = decodeURIComponent(dropIdMatch[1]);
 
             const fragment = window.location.hash.slice(1);
             if (fragment) {
@@ -369,9 +373,116 @@
             const progressText = document.getElementById('progress-text');
             progressSection.style.display = 'block';
 
+            const downloadDirect = async () => {
+                progressText.textContent = 'Downloading... (fallback)';
+                const resp = await fetch(`/api/blob/${dropId}`);
+                if (!resp.ok) {
+                    if (resp.status === 403) throw new Error('Access denied — locked to another device.');
+                    if (resp.status === 404) throw new Error('Drop not found or already destroyed.');
+                    if (resp.status === 410) throw new Error('Drop already downloaded.');
+                    throw new Error('HTTP ' + resp.status);
+                }
+
+                const contentLength = parseInt(resp.headers.get('Content-Length') || '0');
+                const reader = resp.body.getReader();
+                const chunks = [];
+                let received = 0;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    received += value.length;
+
+                    if (contentLength > 0) {
+                        const pct = Math.round((received / contentLength) * 100);
+                        progressFill.style.width = pct + '%';
+                        progressText.textContent = `Downloading... ${pct}% — ${formatBytes(received)} / ${formatBytes(contentLength)}`;
+                    }
+                }
+
+                const encrypted = new Uint8Array(received);
+                let offset = 0;
+                for (const chunk of chunks) {
+                    encrypted.set(chunk, offset);
+                    offset += chunk.length;
+                }
+
+                progressFill.style.width = '100%';
+                progressText.textContent = '🔓 Decrypting...';
+                await new Promise(r => setTimeout(r, 100));
+
+                let decrypted;
+                try {
+                    decrypted = wasmModule.decrypt_blob(encrypted, encryptionKey);
+                } catch (e) {
+                    if (isPasswordDrop) {
+                        throw new Error('Decryption failed — wrong password? The key didn\'t match.');
+                    }
+                    throw new Error('Decryption failed — key mismatch or corrupted data.');
+                }
+
+                progressText.textContent = 'Saving file...';
+                const blob = new Blob([decrypted], { type: meta.mime || 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = meta.filename || 'deadrop-file';
+                a.click();
+                URL.revokeObjectURL(url);
+
+                showSuccess('✅ File decrypted and downloaded!');
+                progressSection.style.display = 'none';
+                encryptionKey = null;
+                passwordSalt = null;
+            };
+
+            const decryptAndSaveEncryptedBlob = async (encrypted) => {
+                progressFill.style.width = '100%';
+                progressText.textContent = '🔓 Decrypting...';
+                await new Promise(r => setTimeout(r, 100));
+
+                let decrypted;
+                try {
+                    decrypted = wasmModule.decrypt_blob(encrypted, encryptionKey);
+                } catch (e) {
+                    if (isPasswordDrop) {
+                        throw new Error('Decryption failed — wrong password? The key didn\'t match.');
+                    }
+                    throw new Error('Decryption failed — key mismatch or corrupted data.');
+                }
+
+                progressText.textContent = 'Saving file...';
+                const blob = new Blob([decrypted], { type: meta.mime || 'application/octet-stream' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = meta.filename || 'deadrop-file';
+                a.click();
+                URL.revokeObjectURL(url);
+
+                showSuccess('✅ File decrypted and downloaded!');
+                progressSection.style.display = 'none';
+                encryptionKey = null;
+                passwordSalt = null;
+            };
+
             try {
+                // Prefer P2P first when available. This streams encrypted bytes over WebSocket.
+                if (location.protocol === 'http:' || location.protocol === 'https:') {
+                    try {
+                        progressText.textContent = '⚡ Connecting via P2P...';
+                        const encrypted = await downloadViaWS(progressFill, progressText, 1);
+                        await decryptAndSaveEncryptedBlob(encrypted);
+                        return;
+                    } catch (e) {
+                        console.warn('P2P failed, falling back to HTTP paths:', e);
+                        progressText.textContent = 'P2P unavailable, falling back...';
+                    }
+                }
+
                 // Prefer chunked streaming API when available (resume + low memory)
-                const chunksResp = await fetch(`/api/chunks/${dropId}`);
+                const chunksResp = await fetchWithTimeout(`/api/chunks/${dropId}`, 8000);
                 if (chunksResp.ok) {
                     const chunksMeta = await chunksResp.json();
 
@@ -402,6 +513,19 @@
                     }
 
                     const w = new Worker('/download-worker.js', { type: 'module' });
+                    let workerStarted = false;
+                    let workerFallbackUsed = false;
+                    const workerFallbackTimer = setTimeout(() => {
+                        if (!workerStarted && !workerFallbackUsed) {
+                            workerFallbackUsed = true;
+                            console.warn('Worker did not start in time; falling back to full blob download.');
+                            w.terminate();
+                            downloadDirect().catch((err) => {
+                                showError(err.message || String(err));
+                                progressSection.style.display = 'none';
+                            });
+                        }
+                    }, 6000);
 
                     // Setup file writer: prefer File System Access API
                     let fileHandle = null;
@@ -419,7 +543,6 @@
                     }
 
                     let writable = null;
-                    let parts = [];
 
                     if (useFs && fileHandle) {
                         try {
@@ -430,41 +553,45 @@
                         }
                     }
 
-                    const recipInput = document.getElementById('recipient-priv-input');
-                    const recipientPriv = recipInput ? recipInput.value.trim() : null;
-
-                    w.postMessage({ type: 'start', dropId, key: encryptionKey, filename: meta.filename, recipient_priv: recipientPriv });
+                    w.postMessage({ action: 'decrypt', dropId, key: encryptionKey, filename: meta.filename, mime: meta.mime });
 
                     w.onmessage = async (ev) => {
+                        if (workerFallbackUsed) return;
                         const m = ev.data;
-                        if (m.type === 'meta') {
-                            progressText.textContent = `Downloading... 0 / ${m.total_chunks}`;
+                        if (m.type === 'debug') {
+                            console.debug('[worker]', m.message);
+                            const st = document.getElementById('status-msg');
+                            st.className = 'status';
+                            st.textContent = '[debug] ' + m.message;
+                            return;
+                        }
+                        if (m.type === 'status') {
+                            workerStarted = true;
+                            clearTimeout(workerFallbackTimer);
+                            progressText.textContent = m.message || 'Working...';
                         } else if (m.type === 'progress') {
-                            const pct = Math.round((m.index / m.total) * 100);
-                            progressFill.style.width = pct + '%';
-                            progressText.textContent = `Downloading... ${pct}% — ${m.index}/${m.total}`;
-                        } else if (m.type === 'chunk') {
-                            const chunk = m.data;
-                            // Write chunk
-                            if (writable) {
-                                await writable.write(chunk);
-                            } else {
-                                parts.push(chunk);
+                            workerStarted = true;
+                            clearTimeout(workerFallbackTimer);
+                            if (typeof m.percent === 'number') {
+                                progressFill.style.width = m.percent + '%';
+                                progressText.textContent = `Downloading... ${m.percent}%`;
                             }
-                        } else if (m.type === 'done') {
+                        } else if (m.type === 'complete') {
+                            workerStarted = true;
+                            clearTimeout(workerFallbackTimer);
+                            const mime = m.mime || meta.mime || 'application/octet-stream';
+                            const filename = m.filename || meta.filename || 'deadrop-file';
+                            const resultBlob = new Blob([m.data], { type: mime });
                             if (writable) {
+                                await writable.write(resultBlob);
                                 await writable.close();
                                 showSuccess('✅ File streamed and saved!');
                             } else {
-                                // assemble blob fallback
-                                const blob = new Blob(parts, { type: meta.mime || 'application/octet-stream' });
-                                const url = URL.createObjectURL(blob);
+                                const url = URL.createObjectURL(resultBlob);
                                 const a = document.createElement('a');
                                 a.href = url;
-                                a.download = meta.filename || 'deadrop-file';
-                                document.body.appendChild(a);
+                                a.download = filename;
                                 a.click();
-                                document.body.removeChild(a);
                                 URL.revokeObjectURL(url);
                                 showSuccess('✅ File decrypted and downloaded (fallback)!');
                             }
@@ -472,81 +599,24 @@
                             encryptionKey = null; passwordSalt = null;
                             w.terminate();
                         } else if (m.type === 'error') {
+                            clearTimeout(workerFallbackTimer);
                             w.terminate();
-                            showError(m.message || 'Download worker error');
-                            progressSection.style.display = 'none';
+                            if (!workerStarted) {
+                                workerFallbackUsed = true;
+                                try {
+                                    await downloadDirect();
+                                } catch (err) {
+                                    showError((err && err.message) || m.message || 'Download worker error');
+                                    progressSection.style.display = 'none';
+                                }
+                            } else {
+                                showError(m.message || 'Download worker error');
+                                progressSection.style.display = 'none';
+                            }
                         }
                     };
                 } else {
-                    // Fallback to existing full-download path
-                    const resp = await fetch(`/api/blob/${dropId}`);
-                    if (!resp.ok) {
-                        if (resp.status === 403) throw new Error('Access denied — locked to another device.');
-                        if (resp.status === 404) throw new Error('Drop not found or already destroyed.');
-                        if (resp.status === 410) throw new Error('Drop already downloaded.');
-                        throw new Error('HTTP ' + resp.status);
-                    }
-
-                    const contentLength = parseInt(resp.headers.get('Content-Length') || '0');
-                    const reader = resp.body.getReader();
-                    const chunks = [];
-                    let received = 0;
-
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        chunks.push(value);
-                        received += value.length;
-
-                        if (contentLength > 0) {
-                            const pct = Math.round((received / contentLength) * 100);
-                            progressFill.style.width = pct + '%';
-                            progressText.textContent = `Downloading... ${pct}% — ${formatBytes(received)} / ${formatBytes(contentLength)}`;
-                        }
-                    }
-
-                    const encrypted = new Uint8Array(received);
-                    let offset = 0;
-                    for (const chunk of chunks) {
-                        encrypted.set(chunk, offset);
-                        offset += chunk.length;
-                    }
-
-                    // Decrypt — yield to browser so UI updates before heavy WASM work
-                    progressFill.style.width = '100%';
-                    progressText.textContent = '🔓 Decrypting...';
-
-                    await new Promise(r => setTimeout(r, 100));
-
-                    let decrypted;
-                    try {
-                        decrypted = wasmModule.decrypt_blob(encrypted, encryptionKey);
-                    } catch (e) {
-                        if (isPasswordDrop) {
-                            throw new Error('Decryption failed — wrong password? The key didn\'t match.');
-                        }
-                        throw new Error('Decryption failed — key mismatch or corrupted data.');
-                    }
-
-                    // Free encrypted data from memory immediately after decryption
-                    // Save file
-                    progressText.textContent = 'Saving file...';
-                    const blob = new Blob([decrypted], { type: meta.mime || 'application/octet-stream' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = meta.filename || 'deadrop-file';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-
-                    showSuccess('✅ File decrypted and downloaded!');
-                    progressSection.style.display = 'none';
-
-                    // Wipe keys from memory
-                    encryptionKey = null;
-                    passwordSalt = null;
+                    await downloadDirect();
                 }
             } catch (e) {
                 console.error('Download failed:', e);
@@ -555,17 +625,26 @@
             }
         }
 
+        function fetchWithTimeout(url, timeoutMs) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), timeoutMs);
+            return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+        }
+
         /* ── WebSocket P2P download ── */
-        function downloadViaWS(progressFill, progressText) {
+        function downloadViaWS(progressFill, progressText, retries = 0) {
             return new Promise((resolve, reject) => {
                 const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const ws = new WebSocket(`${proto}//${location.host}/ws/blob/${dropId}`);
+                const wsUrl = `${proto}//${location.host}/ws/blob/${dropId}`;
+                console.debug('[p2p] opening', wsUrl, 'retries left', retries);
+                const ws = new WebSocket(wsUrl);
                 ws.binaryType = 'arraybuffer';
 
                 let chunks = [];
                 let received = 0;
                 let totalSize = 0;
                 let gotData = false;
+                let completed = false;
 
                 // 5s timeout for initial connection
                 const timeout = setTimeout(() => {
@@ -573,7 +652,10 @@
                     reject(new Error('P2P connection timeout'));
                 }, 5000);
 
-                ws.onopen = () => clearTimeout(timeout);
+                ws.onopen = () => {
+                    clearTimeout(timeout);
+                    console.debug('[p2p] open');
+                };
 
                 ws.onmessage = (event) => {
                     if (typeof event.data === 'string') {
@@ -582,7 +664,9 @@
                             if (msg.type === 'start') {
                                 totalSize = msg.encrypted_size || 0;
                                 progressText.textContent = '⚡ Streaming via P2P...';
+                                console.debug('[p2p] start', msg);
                             } else if (msg.type === 'done') {
+                                completed = true;
                                 progressText.textContent = '🧩 Assembling chunks...';
                                 // Yield before heavy memory operation
                                 setTimeout(() => {
@@ -605,6 +689,7 @@
                         gotData = true;
                         chunks.push(event.data);
                         received += event.data.byteLength;
+                        console.debug('[p2p] chunk', received, '/', totalSize || 'unknown');
                         if (totalSize > 0) {
                             const pct = Math.round((received / totalSize) * 100);
                             progressFill.style.width = pct + '%';
@@ -613,14 +698,30 @@
                     }
                 };
 
-                ws.onerror = () => {
+                ws.onerror = (err) => {
                     clearTimeout(timeout);
+                    console.warn('[p2p] error', err);
+                    if (retries > 0) {
+                        setTimeout(() => {
+                            downloadViaWS(progressFill, progressText, retries - 1).then(resolve).catch(reject);
+                        }, 250);
+                        return;
+                    }
                     reject(new Error('P2P error'));
                 };
 
                 ws.onclose = () => {
                     clearTimeout(timeout);
-                    if (!gotData) reject(new Error('P2P closed early'));
+                    console.debug('[p2p] close', { gotData, completed, readyState: ws.readyState });
+                    if (!gotData && !completed) {
+                        if (retries > 0) {
+                            setTimeout(() => {
+                                downloadViaWS(progressFill, progressText, retries - 1).then(resolve).catch(reject);
+                            }, 250);
+                            return;
+                        }
+                        reject(new Error('P2P closed early'));
+                    }
                 };
             });
         }

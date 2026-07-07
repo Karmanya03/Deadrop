@@ -65,24 +65,64 @@ echo -e "  ${BOLD}Install to:${NC}    $INSTALL_DIR"
 echo ""
 
 # ─── Download ───
-echo -e "${YELLOW}⬇  Downloading ${ASSET}...${NC}"
+echo -e "  ${YELLOW}⬇  Downloading ${ASSET}...${NC}"
 
 TMPDIR="$(mktemp -d)"
 TMPFILE="${TMPDIR}/${BINARY}"
+VERBOSE=${DEADROP_INSTALL_VERBOSE:-0}
 
+download_with_curl() {
+    curl -fSL -w '%{http_code}' -o "$TMPFILE" "$1" 2>"${TMPDIR}/curl.log" || true
+}
+
+HTTP_CODE=""
 if command -v curl &> /dev/null; then
-    HTTP_CODE=$(curl -fSL -w '%{http_code}' -o "$TMPFILE" "$DOWNLOAD_URL" 2>/dev/null || true)
+    # Try multiple times with backoff
+    for attempt in 1 2 3; do
+        if [ "$VERBOSE" -eq 1 ]; then echo "  curl attempt $attempt -> $DOWNLOAD_URL"; fi
+        HTTP_CODE=$(download_with_curl "$DOWNLOAD_URL")
+        if [ "$HTTP_CODE" = "200" ]; then break; fi
+        sleep $((attempt * 2))
+    done
 elif command -v wget &> /dev/null; then
-    wget -q -O "$TMPFILE" "$DOWNLOAD_URL" 2>/dev/null && HTTP_CODE="200" || HTTP_CODE="404"
+    wget -q -O "$TMPFILE" "$DOWNLOAD_URL" 2>"${TMPDIR}/wget.log" && HTTP_CODE="200" || HTTP_CODE="404"
 else
     echo -e "${RED}✗ Neither curl nor wget found. Please install one and retry.${NC}"
     rm -rf "$TMPDIR"
     exit 1
 fi
 
+# If curl/wget failed, try GitHub API to resolve browser_download_url and retry
+if [ -z "$HTTP_CODE" ] || [ "$HTTP_CODE" != "200" ]; then
+    if [ "$VERBOSE" -eq 1 ]; then echo "  Initial download failed (HTTP $HTTP_CODE). Trying GitHub API fallback..."; fi
+    API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+    # Prefer python3 for JSON parsing if available
+    if command -v python3 &> /dev/null; then
+        DOWNLOAD_URL_API=$(curl -s -H "User-Agent: deadrop-installer" "$API_URL" | python3 -c "import sys,json; r=json.load(sys.stdin); assets=r.get('assets',[]); print(next((a.get('browser_download_url','') for a in assets if a.get('name','')=='$ASSET'),''))")
+    elif command -v python &> /dev/null; then
+        DOWNLOAD_URL_API=$(curl -s -H "User-Agent: deadrop-installer" "$API_URL" | python -c "import sys,json; r=json.load(sys.stdin); assets=r.get('assets',[]); print(next((a.get('browser_download_url','') for a in assets if a.get('name','')=='$ASSET'),''))")
+    else
+        # Fallback naive grep/sed (best effort)
+        DOWNLOAD_URL_API=$(curl -s -H "User-Agent: deadrop-installer" "$API_URL" | grep -o '"browser_download_url": *"[^"]*"' | grep "$ASSET" -B1 | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+    fi
+
+    if [ -n "$DOWNLOAD_URL_API" ]; then
+        if [ "$VERBOSE" -eq 1 ]; then echo "  Resolved via API: $DOWNLOAD_URL_API"; fi
+        if command -v curl &> /dev/null; then
+            HTTP_CODE=$(curl -fSL -w '%{http_code}' -o "$TMPFILE" "$DOWNLOAD_URL_API" 2>"${TMPDIR}/curl.log" || true)
+        elif command -v wget &> /dev/null; then
+            wget -q -O "$TMPFILE" "$DOWNLOAD_URL_API" 2>"${TMPDIR}/wget.log" && HTTP_CODE="200" || HTTP_CODE="404"
+        fi
+    else
+        if [ "$VERBOSE" -eq 1 ]; then echo "  GitHub API did not return an asset URL."; fi
+    fi
+fi
+
 if [ ! -f "$TMPFILE" ] || [ ! -s "$TMPFILE" ] || [ "$HTTP_CODE" != "200" ]; then
-    echo -e "${RED}✗ Download failed (HTTP $HTTP_CODE). Release may not exist yet.${NC}"
+    echo -e "${RED}✗ Download failed (HTTP $HTTP_CODE). Release may not exist yet or network blocked the download.${NC}"
     echo -e "${RED}  Check: https://github.com/${REPO}/releases${NC}"
+    if [ -f "${TMPDIR}/curl.log" ]; then echo "--- curl.log ---"; cat "${TMPDIR}/curl.log"; echo "--- end curl.log ---"; fi
+    if [ -f "${TMPDIR}/wget.log" ]; then echo "--- wget.log ---"; cat "${TMPDIR}/wget.log"; echo "--- end wget.log ---"; fi
     rm -rf "$TMPDIR"
     exit 1
 fi

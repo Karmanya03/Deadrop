@@ -5,7 +5,7 @@ use chacha20poly1305::{
     aead::{Aead, KeyInit},
 };
 use rand::Rng;
-use std::io::{Read, Write, Seek, SeekFrom, BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroize;
 
@@ -29,10 +29,7 @@ impl Drop for EncryptionKey {
         // Unlock memory before zeroizing (best-effort, ignore errors)
         #[cfg(unix)]
         unsafe {
-            libc::munlock(
-                self.0.as_ptr() as *const libc::c_void,
-                self.0.len(),
-            );
+            libc::munlock(self.0.as_ptr() as *const libc::c_void, self.0.len());
         }
         self.zeroize();
     }
@@ -74,10 +71,7 @@ impl EncryptionKey {
     fn lock_memory(&self) {
         #[cfg(unix)]
         unsafe {
-            let ret = libc::mlock(
-                self.0.as_ptr() as *const libc::c_void,
-                self.0.len(),
-            );
+            let ret = libc::mlock(self.0.as_ptr() as *const libc::c_void, self.0.len());
             if ret != 0 {
                 // mlock can fail if user doesn't have CAP_IPC_LOCK or ulimit is too low.
                 // Not fatal — key is still zeroized on drop either way.
@@ -147,10 +141,7 @@ pub fn safe_filename(name: &str, is_archive: bool) -> String {
 
     // Truncate while preserving extension
     let path = Path::new(&sanitized);
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     // Handle double extensions like .tar.gz
     let full_ext = if sanitized.ends_with(".tar.gz") {
@@ -171,10 +162,7 @@ pub fn safe_filename(name: &str, is_archive: bool) -> String {
 
     // Calculate how many chars we can keep for the stem
     let max_stem = MAX_FILENAME_LEN.saturating_sub(ext_with_dot.len() + 1); // +1 for safety
-    let stem = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("file");
+    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
 
     // For .tar.gz, file_stem returns "name.tar", so strip that too
     let stem = stem.strip_suffix(".tar").unwrap_or(stem);
@@ -259,13 +247,14 @@ pub fn encrypt_file_to_disk(
 
     let mut nonce_bytes = [0u8; 24];
     rand::rng().fill_bytes(&mut nonce_bytes);
-    let nonce = *chachapoly1305_nonce_from_slice(&nonce_bytes);
+    let nonce = chacha20poly1305::XNonce::from(nonce_bytes);
 
     // Create temp file for encrypted output
     // NOTE: tempfile::NamedTempFile::new() already uses short random names
     // like /tmp/.tmpXXXXXX, so this is safe on Windows (no long path issue)
     let temp_file = tempfile::NamedTempFile::new()?;
-    let (file, temp_path) = temp_file.keep()
+    let (file, temp_path) = temp_file
+        .keep()
         .map_err(|e| anyhow::anyhow!("Failed to persist temp file: {}", e))?;
 
     let mut writer = BufWriter::with_capacity(CHUNK_SIZE * 2, file);
@@ -285,7 +274,10 @@ pub fn encrypt_file_to_disk(
 
         let chunk_nonce = derive_chunk_nonce(&nonce, chunk_index);
         let encrypted = cipher
-            .encrypt(&chunk_nonce.into(), &buf[..bytes_read])
+            .encrypt(
+                &chacha20poly1305::XNonce::from(chunk_nonce),
+                &buf[..bytes_read],
+            )
             .map_err(|e| anyhow::anyhow!("Encryption error at chunk {}: {}", chunk_index, e))?;
 
         // Write: [chunk_len (4 bytes LE)][encrypted_chunk_with_auth_tag]
@@ -305,7 +297,7 @@ pub fn encrypt_file_to_disk(
     file.seek(SeekFrom::Start(0))?;
 
     let header = EncryptedHeader {
-        nonce: nonce.into(),
+        nonce: nonce_bytes,
         total_chunks: chunk_index,
         original_size: bytes_processed,
     };
@@ -334,7 +326,7 @@ pub fn encrypt_file_streaming(
 
     let mut nonce_bytes = [0u8; 24];
     rand::rng().fill_bytes(&mut nonce_bytes);
-    let nonce = *chachapoly1305_nonce_from_slice(&nonce_bytes);
+    let nonce = chacha20poly1305::XNonce::from(nonce_bytes);
 
     let estimated_size = file_size as usize
         + (file_size as usize / CHUNK_SIZE + 1) * (AUTH_TAG_SIZE + 4)
@@ -355,7 +347,10 @@ pub fn encrypt_file_streaming(
 
         let chunk_nonce = derive_chunk_nonce(&nonce, chunk_index);
         let encrypted = cipher
-            .encrypt(&chunk_nonce.into(), &buf[..bytes_read])
+            .encrypt(
+                &chacha20poly1305::XNonce::from(chunk_nonce),
+                &buf[..bytes_read],
+            )
             .map_err(|e| anyhow::anyhow!("Encryption error at chunk {}: {}", chunk_index, e))?;
 
         let len = (encrypted.len() as u32).to_le_bytes();
@@ -368,7 +363,7 @@ pub fn encrypt_file_streaming(
     }
 
     let header = EncryptedHeader {
-        nonce: nonce.into(),
+        nonce: nonce_bytes,
         total_chunks: chunk_index,
         original_size: bytes_processed,
     };
@@ -399,8 +394,4 @@ fn derive_chunk_nonce(base_nonce: &chacha20poly1305::XNonce, chunk_index: u64) -
         nonce[i] ^= idx_bytes[i];
     }
     nonce
-}
-
-fn chachapoly1305_nonce_from_slice(slice: &[u8]) -> &chacha20poly1305::XNonce {
-    chacha20poly1305::XNonce::from_slice(slice)
 }

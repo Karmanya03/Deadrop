@@ -26,7 +26,10 @@ fn main() {
             println!("cargo:warning=wasm-pack exited with: {}", s);
         }
         Err(e) => {
-            println!("cargo:warning=wasm-pack not found ({}). Using pre-built WASM.", e);
+            println!(
+                "cargo:warning=wasm-pack not found ({}). Using pre-built WASM.",
+                e
+            );
         }
     }
 }

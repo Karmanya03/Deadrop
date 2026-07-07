@@ -90,7 +90,7 @@ pub fn decrypt_chunk(
     }
 
     let decrypted = cipher
-        .decrypt(chunk_nonce.as_slice().into(), encrypted_chunk)
+        .decrypt(&chacha20poly1305::XNonce::from(chunk_nonce), encrypted_chunk)
         .map_err(|_| JsValue::from_str("Decryption failed — wrong key or data corrupted"))?;
     Ok(decrypted)
 }
@@ -164,7 +164,7 @@ pub fn decrypt_blob(
         }
 
         let decrypted = cipher
-            .decrypt(chunk_nonce.as_slice().into(), encrypted_chunk)
+            .decrypt(&chacha20poly1305::XNonce::from(chunk_nonce), encrypted_chunk)
             .map_err(|_| JsValue::from_str(&format!(
                 "Decryption failed at chunk {} — wrong key or corrupted", chunk_index
             )))?;
@@ -197,7 +197,7 @@ pub fn decrypt_envelope(shared_key_base64: &str, payload: &[u8]) -> Result<Vec<u
     let ct = &payload[24..];
 
     let decrypted = cipher
-        .decrypt(chacha20poly1305::XNonce::from_slice(&nonce), ct)
+        .decrypt(&chacha20poly1305::XNonce::from(nonce), ct)
         .map_err(|_| JsValue::from_str("Envelope decryption failed"))?;
 
     Ok(decrypted)

@@ -24,10 +24,7 @@ impl Drop for CloudflareTunnel {
     fn drop(&mut self) {
         if let Some(ref mut child) = self.child {
             let _ = child.start_kill();
-            eprintln!(
-                " {} Cloudflare tunnel stopped",
-                console::style("☁").dim()
-            );
+            eprintln!(" {} Cloudflare tunnel stopped", console::style("☁").dim());
         }
     }
 }
@@ -57,17 +54,18 @@ pub async fn try_start_tunnel(local_port: u16) -> Option<CloudflareTunnel> {
 ///   2. System PATH: check if `cloudflared` is available globally
 ///   3. Auto-download: fetch from GitHub to ~/.deadrop/bin/
 async fn resolve_cloudflared() -> anyhow::Result<PathBuf> {
-    let bin_name = if cfg!(windows) { "cloudflared.exe" } else { "cloudflared" };
+    let bin_name = if cfg!(windows) {
+        "cloudflared.exe"
+    } else {
+        "cloudflared"
+    };
 
     // ── Tier 1: Bundled next to ded executable ──
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(exe_dir) = exe_path.parent() {
             let bundled = exe_dir.join(bin_name);
             if bundled.exists() {
-                eprintln!(
-                    " {} Using bundled cloudflared",
-                    console::style("☁").dim()
-                );
+                eprintln!(" {} Using bundled cloudflared", console::style("☁").dim());
                 return Ok(bundled);
             }
         }
@@ -75,10 +73,7 @@ async fn resolve_cloudflared() -> anyhow::Result<PathBuf> {
 
     // ── Tier 2: System PATH ──
     if is_in_path(bin_name).await {
-        eprintln!(
-            " {} Using system cloudflared",
-            console::style("☁").dim()
-        );
+        eprintln!(" {} Using system cloudflared", console::style("☁").dim());
         return Ok(PathBuf::from(bin_name));
     }
 
@@ -128,8 +123,8 @@ async fn is_in_path(bin_name: &str) -> bool {
 
 /// Get or create ~/.deadrop/bin/ directory
 fn get_deadrop_bin_dir() -> anyhow::Result<PathBuf> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
+    let home =
+        dirs::home_dir().ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?;
     let bin_dir = home.join(".deadrop").join("bin");
     std::fs::create_dir_all(&bin_dir)?;
     Ok(bin_dir)
@@ -149,7 +144,10 @@ async fn download_cloudflared(dest: &Path) -> anyhow::Result<()> {
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()?;
 
-    let response = client.get(&url).send().await
+    let response = client
+        .get(&url)
+        .send()
+        .await
         .map_err(|e| anyhow::anyhow!("Download failed: {}", e))?;
 
     if !response.status().is_success() {
@@ -159,7 +157,9 @@ async fn download_cloudflared(dest: &Path) -> anyhow::Result<()> {
         );
     }
 
-    let bytes = response.bytes().await
+    let bytes = response
+        .bytes()
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to read download: {}", e))?;
 
     // Write to a temp file first, then rename (atomic-ish)
@@ -191,16 +191,17 @@ fn get_cloudflared_download_url() -> anyhow::Result<String> {
     let base = "https://github.com/cloudflare/cloudflared/releases/latest/download";
 
     let filename = match (std::env::consts::OS, std::env::consts::ARCH) {
-        ("windows", "x86_64")  => "cloudflared-windows-amd64.exe",
+        ("windows", "x86_64") => "cloudflared-windows-amd64.exe",
         ("windows", "aarch64") => "cloudflared-windows-amd64.exe",
-        ("linux", "x86_64")    => "cloudflared-linux-amd64",
-        ("linux", "aarch64")   => "cloudflared-linux-arm64",
-        ("linux", "arm")       => "cloudflared-linux-arm",
-        ("macos", "x86_64")    => "cloudflared-darwin-amd64.tgz",
-        ("macos", "aarch64")   => "cloudflared-darwin-amd64.tgz",
+        ("linux", "x86_64") => "cloudflared-linux-amd64",
+        ("linux", "aarch64") => "cloudflared-linux-arm64",
+        ("linux", "arm") => "cloudflared-linux-arm",
+        ("macos", "x86_64") => "cloudflared-darwin-amd64.tgz",
+        ("macos", "aarch64") => "cloudflared-darwin-amd64.tgz",
         (os, arch) => anyhow::bail!(
             "Unsupported platform: {}-{} — install cloudflared manually",
-            os, arch
+            os,
+            arch
         ),
     };
 
@@ -284,7 +285,9 @@ pub async fn start_tunnel(local_port: u16) -> anyhow::Result<CloudflareTunnel> {
 /// Extract the trycloudflare.com URL from a cloudflared log line
 fn extract_tunnel_url(line: &str) -> Option<String> {
     for word in line.split_whitespace() {
-        let trimmed = word.trim_matches(|c: char| !c.is_alphanumeric() && c != ':' && c != '/' && c != '.' && c != '-');
+        let trimmed = word.trim_matches(|c: char| {
+            !c.is_alphanumeric() && c != ':' && c != '/' && c != '.' && c != '-'
+        });
         if trimmed.starts_with("https://") && trimmed.contains(".trycloudflare.com") {
             return Some(trimmed.to_string());
         }

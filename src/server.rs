@@ -2,25 +2,28 @@ use futures_util::sink::SinkExt;
 
 use base64::Engine;
 
+use crate::{
+    config::{DropConfig, ReceiveConfig},
+    crypto, progress,
+    store::BlobStore,
+};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::http::HeaderValue;
+use axum::middleware;
 use axum::{
-    Router,
+    Json, Router,
     body::Body,
     extract::{ConnectInfo, Path, State},
-    http::{StatusCode, header, HeaderMap},
+    http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
-    Json,
 };
-use axum::extract::ws::{WebSocketUpgrade, WebSocket, Message};
 use rust_embed::Embed;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::Notify;
 use tokio_util::io::ReaderStream;
-use axum::middleware;
-use axum::http::HeaderValue;
-use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
-use crate::{config::{DropConfig, ReceiveConfig}, crypto, progress, store::BlobStore};
+use tower_governor::{GovernorLayer, governor::GovernorConfigBuilder};
 
 #[derive(Embed)]
 #[folder = "web/"]
@@ -51,7 +54,10 @@ async fn security_headers(
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
-    headers.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
+    headers.insert(
+        "X-Content-Type-Options",
+        HeaderValue::from_static("nosniff"),
+    );
     headers.insert("Referrer-Policy", HeaderValue::from_static("no-referrer"));
     headers.insert(
         "Permissions-Policy",
@@ -65,10 +71,13 @@ async fn security_headers(
              style-src 'self' 'unsafe-inline'; \
              img-src 'self' data:; \
              connect-src 'self'; \
-             frame-ancestors 'none';"
+             frame-ancestors 'none';",
         ),
     );
-    headers.insert("Cache-Control", HeaderValue::from_static("no-store, no-cache, must-revalidate"));
+    headers.insert(
+        "Cache-Control",
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
+    );
     headers.insert("Pragma", HeaderValue::from_static("no-cache"));
     response
 }
@@ -82,7 +91,8 @@ async fn serve_favicon() -> Response {
             StatusCode::OK,
             [(header::CONTENT_TYPE, "image/x-icon")],
             content.data.to_vec(),
-        ).into_response(),
+        )
+            .into_response(),
         None => StatusCode::NO_CONTENT.into_response(),
     }
 }
@@ -154,16 +164,14 @@ pub async fn start(
         let archive_bar = pm.create_encrypt_bar(0);
         archive_bar.set_style(
             indicatif::ProgressStyle::with_template(
-                " {spinner:.green} Archiving [{bar:40.yellow/dark_gray}] {pos}/{len} files"
+                " {spinner:.green} Archiving [{bar:40.yellow/dark_gray}] {pos}/{len} files",
             )
             .unwrap()
-            .progress_chars("━╸─")
+            .progress_chars("━╸─"),
         );
 
-        let (archive_bytes, archive_name): (Vec<u8>, String) = crate::archive::compress_folder(
-            &config.file,
-            &archive_bar,
-        )?;
+        let (archive_bytes, archive_name): (Vec<u8>, String) =
+            crate::archive::compress_folder(&config.file, &archive_bar)?;
 
         file_size = archive_bytes.len() as u64;
         filename = archive_name;
@@ -173,20 +181,18 @@ pub async fn start(
 
         if file_size > DISK_THRESHOLD {
             let mut cursor = std::io::Cursor::new(&archive_bytes);
-            let info = crypto::encrypt_file_to_disk(
-                &mut cursor, &key, file_size,
-                |bytes| encrypt_bar.set_position(bytes),
-            )?;
+            let info = crypto::encrypt_file_to_disk(&mut cursor, &key, file_size, |bytes| {
+                encrypt_bar.set_position(bytes)
+            })?;
             encrypted_size = info.total_size;
             encrypted_path = Some(info.path);
             ciphertext = None;
             total_chunks = info.total_chunks;
         } else {
             let mut cursor = std::io::Cursor::new(&archive_bytes);
-            let ct = crypto::encrypt_file_streaming(
-                &mut cursor, &key, file_size,
-                |bytes| encrypt_bar.set_position(bytes),
-            )?;
+            let ct = crypto::encrypt_file_streaming(&mut cursor, &key, file_size, |bytes| {
+                encrypt_bar.set_position(bytes)
+            })?;
             encrypted_size = ct.len() as u64;
             ciphertext = Some(ct);
             encrypted_path = None;
@@ -194,29 +200,34 @@ pub async fn start(
         encrypt_bar.finish_and_clear();
     } else {
         file_size = std::fs::metadata(&config.file)?.len();
-        filename = config.file.file_name().unwrap().to_string_lossy().to_string();
+        filename = config
+            .file
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
 
         let pm = progress::ProgressManager::new();
         let encrypt_bar = pm.create_encrypt_bar(file_size);
 
         if file_size > DISK_THRESHOLD {
             let mut file = std::fs::File::open(&config.file)?;
-            let info = crypto::encrypt_file_to_disk(
-                &mut file, &key, file_size,
-                |bytes| encrypt_bar.set_position(bytes),
-            )?;
+            let info = crypto::encrypt_file_to_disk(&mut file, &key, file_size, |bytes| {
+                encrypt_bar.set_position(bytes)
+            })?;
             encrypted_size = info.total_size;
             encrypted_path = Some(info.path);
             ciphertext = None;
             total_chunks = info.total_chunks;
         } else {
             let mut file = std::fs::File::open(&config.file)?;
-            let ct = crypto::encrypt_file_streaming(
-                &mut file, &key, file_size,
-                |bytes| encrypt_bar.set_position(bytes),
-            )?;
+            let ct = crypto::encrypt_file_streaming(&mut file, &key, file_size, |bytes| {
+                encrypt_bar.set_position(bytes)
+            })?;
             // derive chunk count from header in-memory
-            if let Ok(header) = crypto::EncryptedHeader::from_bytes(&ct[..crypto::EncryptedHeader::SIZE]) {
+            if let Ok(header) =
+                crypto::EncryptedHeader::from_bytes(&ct[..crypto::EncryptedHeader::SIZE])
+            {
                 total_chunks = header.total_chunks;
             }
             encrypted_size = ct.len() as u64;
@@ -239,10 +250,10 @@ pub async fn start(
     // Build recipient envelopes if recipients were provided
     let mut recipient_envelopes = Vec::new();
     if !config.recipients.is_empty() {
-        use ring::{agreement, rand as ring_rand};
-        use ring::rand::SecureRandom;
-        use sha2::{Sha256, Digest};
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use ring::rand::SecureRandom;
+        use ring::{agreement, rand as ring_rand};
+        use sha2::{Digest, Sha256};
 
         let rng = ring_rand::SystemRandom::new();
         let cek_bytes = &key.0;
@@ -251,14 +262,20 @@ pub async fn start(
             match URL_SAFE_NO_PAD.decode(recip_b64) {
                 Ok(recip_bytes) => {
                     if recip_bytes.len() != 32 {
-                        eprintln!(" {} Recipient pubkey {} invalid length", console::style("⚠").yellow(), i);
+                        eprintln!(
+                            " {} Recipient pubkey {} invalid length",
+                            console::style("⚠").yellow(),
+                            i
+                        );
                         continue;
                     }
 
                     // Generate ephemeral X25519 keypair
-                    let eph_priv = agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng)
-                        .map_err(|e| anyhow::anyhow!("Eph keygen failed: {:?}", e))?;
-                    let eph_pub = eph_priv.compute_public_key()
+                    let eph_priv =
+                        agreement::EphemeralPrivateKey::generate(&agreement::X25519, &rng)
+                            .map_err(|e| anyhow::anyhow!("Eph keygen failed: {:?}", e))?;
+                    let eph_pub = eph_priv
+                        .compute_public_key()
                         .map_err(|e| anyhow::anyhow!("Pubkey compute failed: {:?}", e))?;
                     let eph_pub_bytes = eph_pub.as_ref().to_vec();
 
@@ -277,18 +294,20 @@ pub async fn start(
                     .map_err(|e| anyhow::anyhow!("ECDH failed: {:?}", e))?;
 
                     // Encrypt CEK using XChaCha20-Poly1305 with derived key
-                    use chacha20poly1305::aead::{Aead, KeyInit};
                     use chacha20poly1305::XChaCha20Poly1305;
+                    use chacha20poly1305::aead::{Aead, KeyInit};
                     let cipher = XChaCha20Poly1305::new_from_slice(&shared).unwrap();
 
                     let mut nonce = [0u8; 24];
-                    rng.fill(&mut nonce).map_err(|e| anyhow::anyhow!("rng fill failed: {:?}", e))?;
-                    let encrypted = cipher.encrypt(chacha20poly1305::XNonce::from_slice(&nonce), &cek_bytes[..])
+                    rng.fill(&mut nonce)
+                        .map_err(|e| anyhow::anyhow!("rng fill failed: {:?}", e))?;
+                    let encrypted = cipher
+                        .encrypt(&chacha20poly1305::XNonce::from(nonce), &cek_bytes[..])
                         .map_err(|e| anyhow::anyhow!("Envelope encrypt failed: {:?}", e))?;
 
                     // Store ephemeral pub and encrypted CEK as base64
                     let eph_pub_b64 = URL_SAFE_NO_PAD.encode(&eph_pub_bytes);
-                    let mut payload = Vec::with_capacity(nonce.len() + encrypted.len());
+                    let mut payload = Vec::with_capacity(24 + encrypted.len());
                     payload.extend_from_slice(&nonce);
                     payload.extend_from_slice(&encrypted);
                     let encrypted_b64 = URL_SAFE_NO_PAD.encode(&payload);
@@ -300,7 +319,12 @@ pub async fn start(
                     });
                 }
                 Err(e) => {
-                    eprintln!(" {} Invalid recipient public key {}: {}", console::style("⚠").yellow(), i, e);
+                    eprintln!(
+                        " {} Invalid recipient public key {}: {}",
+                        console::style("⚠").yellow(),
+                        i,
+                        e
+                    );
                 }
             }
         }
@@ -350,6 +374,7 @@ pub async fn start(
 
     let app = rate_limited
         .route("/assets/{*path}", get(serve_web_asset))
+        .route("/download-worker.js", get(serve_root_worker))
         .route("/wasm/{*path}", get(serve_wasm_asset))
         .route("/favicon.ico", get(serve_favicon))
         .layer(middleware::from_fn(security_headers))
@@ -552,30 +577,68 @@ pub async fn start_receive(
 
 fn print_receive_banner(url: &str, output_dir: &std::path::Path) {
     eprintln!();
-    eprintln!("{}", console::style(" ██████╗ ███████╗ █████╗ ██████╗ ██████╗ ██████╗ ██████╗ ").cyan().bold());
-    eprintln!("{}", console::style(" ██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔═══██╗██╔══██╗").cyan().bold());
-    eprintln!("{}", console::style(" ██║  ██║█████╗  ███████║██║  ██║██████╔╝██║   ██║██████╔╝").cyan().bold());
-    eprintln!("{}", console::style(" ██║  ██║██╔══╝  ██╔══██║██║  ██║██╔══██╗██║   ██║██╔═══╝ ").cyan().bold());
-    eprintln!("{}", console::style(" ██████╔╝███████╗██║  ██║██████╔╝██║  ██║╚██████╔╝██║     ").cyan().bold());
-    eprintln!("{}", console::style(" ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ").cyan().bold());
+    eprintln!(
+        "{}",
+        console::style(" ██████╗ ███████╗ █████╗ ██████╗ ██████╗ ██████╗ ██████╗ ")
+            .cyan()
+            .bold()
+    );
+    eprintln!(
+        "{}",
+        console::style(" ██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔═══██╗██╔══██╗")
+            .cyan()
+            .bold()
+    );
+    eprintln!(
+        "{}",
+        console::style(" ██║  ██║█████╗  ███████║██║  ██║██████╔╝██║   ██║██████╔╝")
+            .cyan()
+            .bold()
+    );
+    eprintln!(
+        "{}",
+        console::style(" ██║  ██║██╔══╝  ██╔══██║██║  ██║██╔══██╗██║   ██║██╔═══╝ ")
+            .cyan()
+            .bold()
+    );
+    eprintln!(
+        "{}",
+        console::style(" ██████╔╝███████╗██║  ██║██████╔╝██║  ██║╚██████╔╝██║     ")
+            .cyan()
+            .bold()
+    );
+    eprintln!(
+        "{}",
+        console::style(" ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝     ")
+            .cyan()
+            .bold()
+    );
     eprintln!();
-    eprintln!(" {} {}", console::style("📥").bold(), console::style("RECEIVE MODE").green().bold());
+    eprintln!(
+        " {} {}",
+        console::style("📥").bold(),
+        console::style("RECEIVE MODE").green().bold()
+    );
     eprintln!();
     eprintln!(" ┌──────────────────────────────────────────────────┐");
-    eprintln!(" │ {} {}",
+    eprintln!(
+        " │ {} {}",
         console::style("URL").bold(),
         console::style(url).green()
     );
     eprintln!(" │");
-    eprintln!(" │ ├─ {} {}",
+    eprintln!(
+        " │ ├─ {} {}",
         console::style("Mode").dim(),
         "Receive (phone → PC)"
     );
-    eprintln!(" │ ├─ {} {}",
+    eprintln!(
+        " │ ├─ {} {}",
         console::style("Save to").dim(),
         output_dir.display()
     );
-    eprintln!(" │ └─ {} {}",
+    eprintln!(
+        " │ └─ {} {}",
         console::style("Crypto").dim(),
         "XChaCha20-Poly1305"
     );
@@ -601,7 +664,8 @@ async fn receive_upload(
         return (
             StatusCode::GONE,
             "Already received a file — server is shutting down",
-        ).into_response();
+        )
+            .into_response();
     }
 
     let filename = headers
@@ -634,12 +698,15 @@ async fn receive_upload(
             let output_path = state.output_dir.join(&safe_filename);
             match std::fs::write(&output_path, &plaintext) {
                 Ok(_) => {
-                    state.received.store(true, std::sync::atomic::Ordering::SeqCst);
+                    state
+                        .received
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
                     eprintln!(
                         " {} Saved: {} ({})",
                         console::style("✅").bold(),
                         console::style(&safe_filename).green(),
-                        console::style(bytesize::ByteSize::b(plaintext.len() as u64).to_string()).dim()
+                        console::style(bytesize::ByteSize::b(plaintext.len() as u64).to_string())
+                            .dim()
                     );
                     eprintln!(
                         " {} File saved to: {}",
@@ -661,11 +728,20 @@ async fn receive_upload(
                         "status": "ok",
                         "saved_as": safe_filename,
                         "size": plaintext.len()
-                    })).into_response()
+                    }))
+                    .into_response()
                 }
                 Err(e) => {
-                    eprintln!(" {} Failed to save file: {}", console::style("❌").bold(), e);
-                    (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save: {}", e)).into_response()
+                    eprintln!(
+                        " {} Failed to save file: {}",
+                        console::style("❌").bold(),
+                        e
+                    );
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("Failed to save: {}", e),
+                    )
+                        .into_response()
                 }
             }
         }
@@ -677,7 +753,10 @@ async fn receive_upload(
 }
 
 fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Result<Vec<u8>> {
-    use chacha20poly1305::{aead::{Aead, KeyInit}, XChaCha20Poly1305};
+    use chacha20poly1305::{
+        XChaCha20Poly1305,
+        aead::{Aead, KeyInit},
+    };
     const HEADER_SIZE: usize = 40;
 
     if data.len() < HEADER_SIZE {
@@ -701,9 +780,7 @@ fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Re
             anyhow::bail!("Truncated chunk length at chunk {}", chunk_index);
         }
 
-        let chunk_len = u32::from_le_bytes(
-            chunk_data[offset..offset + 4].try_into()?
-        ) as usize;
+        let chunk_len = u32::from_le_bytes(chunk_data[offset..offset + 4].try_into()?) as usize;
         offset += 4;
 
         if offset + chunk_len > chunk_data.len() {
@@ -720,10 +797,16 @@ fn decrypt_uploaded_blob(data: &[u8], key: &crypto::EncryptionKey) -> anyhow::Re
         }
 
         let decrypted = cipher
-            .decrypt(chunk_nonce.as_slice().into(), encrypted_chunk)
-            .map_err(|_| anyhow::anyhow!(
-                "Decryption failed at chunk {} — wrong key or corrupted", chunk_index
-            ))?;
+            .decrypt(
+                &chacha20poly1305::XNonce::from(chunk_nonce),
+                encrypted_chunk,
+            )
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Decryption failed at chunk {} — wrong key or corrupted",
+                    chunk_index
+                )
+            })?;
 
         plaintext.extend_from_slice(&decrypted);
     }
@@ -735,12 +818,22 @@ async fn serve_web_asset_receive(Path(path): Path<String>) -> Response {
     match WebAssets::get(&path) {
         Some(content) => {
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
-            (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.to_vec()).into_response()
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime.as_ref())],
+                content.data.to_vec(),
+            )
+                .into_response()
         }
         None => match StaticAssets::get(&path) {
             Some(content) => {
                 let mime = mime_guess::from_path(&path).first_or_octet_stream();
-                (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.to_vec()).into_response()
+                (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, mime.as_ref())],
+                    content.data.to_vec(),
+                )
+                    .into_response()
             }
             None => StatusCode::NOT_FOUND.into_response(),
         },
@@ -888,10 +981,7 @@ async fn ws_upload_handler(
     })
 }
 
-async fn handle_ws_upload(
-    mut socket: WebSocket,
-    state: Arc<ReceiveState>,
-) -> anyhow::Result<()> {
+async fn handle_ws_upload(mut socket: WebSocket, state: Arc<ReceiveState>) -> anyhow::Result<()> {
     let mut filename = "received_file".to_string();
     let mut encrypted_data: Vec<u8> = Vec::new();
     let mut started = false;
@@ -904,10 +994,7 @@ async fn handle_ws_upload(
                 match json["type"].as_str() {
                     Some("start") => {
                         if let Some(name) = json["filename"].as_str() {
-                            filename = name
-                                .replace("..", "")
-                                .replace('/', "")
-                                .replace('\\', "");
+                            filename = name.replace("..", "").replace('/', "").replace('\\', "");
                             if filename.is_empty() {
                                 filename = "received_file".to_string();
                             }
@@ -968,9 +1055,7 @@ async fn handle_ws_upload(
         "size": plaintext.len()
     });
 
-    let _ = socket
-        .send(Message::from(resp.to_string()))
-        .await;
+    let _ = socket.send(Message::from(resp.to_string())).await;
     let _ = socket.close().await;
 
     let shutdown = state.shutdown.clone();
@@ -1022,16 +1107,19 @@ async fn serve_blob(
         match pinned.as_ref() {
             None => *pinned = Some(client_ip.clone()),
             Some(ip) if ip == &client_ip => {}
-            Some(_) if tunnel => {}  // Allow tunnel requests through
+            Some(_) if tunnel => {} // Allow tunnel requests through
             Some(_) => {
                 eprintln!(
                     " {} Blocked download attempt from {} [resolved: {}] (pinned to different IP)",
-                    console::style("🛡").red(), addr, client_ip
+                    console::style("🛡").red(),
+                    addr,
+                    client_ip
                 );
                 return (
                     StatusCode::FORBIDDEN,
                     "Access denied — this drop is locked to another device",
-                ).into_response();
+                )
+                    .into_response();
             }
         }
     }
@@ -1048,8 +1136,12 @@ async fn serve_blob(
         match tokio::fs::File::open(path).await {
             Ok(file) => Body::from_stream(ReaderStream::new(file)),
             Err(e) => {
-                eprintln!(" {} Failed to open encrypted file {}: {}",
-                    console::style("⚠").yellow(), path.display(), e);
+                eprintln!(
+                    " {} Failed to open encrypted file {}: {}",
+                    console::style("⚠").yellow(),
+                    path.display(),
+                    e
+                );
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         }
@@ -1081,7 +1173,8 @@ async fn serve_blob(
             (header::CONTENT_LENGTH, &encrypted_size.to_string()),
         ],
         body,
-    ).into_response()
+    )
+        .into_response()
 }
 
 async fn serve_meta(Path(id): Path<String>, State(state): State<Arc<AppState>>) -> Response {
@@ -1090,7 +1183,8 @@ async fn serve_meta(Path(id): Path<String>, State(state): State<Arc<AppState>>) 
             StatusCode::GONE,
             [(header::CONTENT_TYPE, "application/json")],
             r#"{"burned":true}"#,
-        ).into_response();
+        )
+            .into_response();
     }
 
     let Some(drop) = state.store.get(&id) else {
@@ -1120,11 +1214,17 @@ async fn serve_meta(Path(id): Path<String>, State(state): State<Arc<AppState>>) 
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
         serde_json::to_string(&meta).unwrap(),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // Return header metadata (nonce, total_chunks, original_size, encrypted_size)
-async fn serve_chunks(Path(id): Path<String>, State(state): State<Arc<AppState>>) -> Response {
+async fn serve_chunks(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
     let Some(drop) = state.store.get(&id) else {
         return (StatusCode::NOT_FOUND, "Drop not found").into_response();
     };
@@ -1138,23 +1238,43 @@ async fn serve_chunks(Path(id): Path<String>, State(state): State<Arc<AppState>>
                 let mut buf = vec![0u8; HEADER_SIZE];
                 use tokio::io::AsyncReadExt;
                 if let Err(e) = f.read_exact(&mut buf).await {
-                    eprintln!(" {} Failed to read header: {}", console::style("⚠").yellow(), e);
+                    eprintln!(
+                        " {} Failed to read header: {}",
+                        console::style("⚠").yellow(),
+                        e
+                    );
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
                 match crypto::EncryptedHeader::from_bytes(&buf) {
                     Ok(h) => h,
-                    Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Bad header: {}", e)).into_response(),
+                    Err(e) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            format!("Bad header: {}", e),
+                        )
+                            .into_response();
+                    }
                 }
             }
             Err(e) => {
-                eprintln!(" {} Failed to open encrypted file: {}", console::style("⚠").yellow(), e);
+                eprintln!(
+                    " {} Failed to open encrypted file: {}",
+                    console::style("⚠").yellow(),
+                    e
+                );
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         }
     } else if let Some(ref data) = drop.ciphertext {
         match crypto::EncryptedHeader::from_bytes(&data[..HEADER_SIZE]) {
             Ok(h) => h,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Bad header: {}", e)).into_response(),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Bad header: {}", e),
+                )
+                    .into_response();
+            }
         }
     } else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -1175,15 +1295,28 @@ async fn serve_chunks(Path(id): Path<String>, State(state): State<Arc<AppState>>
         })).collect::<Vec<_>>(),
     });
 
+    eprintln!(
+        " {} /api/chunks/{} requested from {}",
+        console::style("→").dim(),
+        id,
+        resolve_client_ip(&addr, &headers)
+    );
+
     (
         StatusCode::OK,
         [(header::CONTENT_TYPE, "application/json")],
         serde_json::to_string(&meta).unwrap(),
-    ).into_response()
+    )
+        .into_response()
 }
 
 // Return the raw encrypted bytes for a single chunk index
-async fn serve_chunk(Path((id, idx)): Path<(String, u64)>, State(state): State<Arc<AppState>>) -> Response {
+async fn serve_chunk(
+    Path((id, idx)): Path<(String, u64)>,
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
     let Some(drop) = state.store.get(&id) else {
         return (StatusCode::NOT_FOUND, "Drop not found").into_response();
     };
@@ -1199,12 +1332,16 @@ async fn serve_chunk(Path((id, idx)): Path<(String, u64)>, State(state): State<A
     let extract_from_slice = |data: &[u8], target: u64| -> anyhow::Result<Vec<u8>> {
         let mut offset = HEADER_SIZE;
         for i in 0.. {
-            if offset + 4 > data.len() { anyhow::bail!("Truncated chunk length at {}", i); }
-            let chunk_len = u32::from_le_bytes(data[offset..offset+4].try_into()?) as usize;
+            if offset + 4 > data.len() {
+                anyhow::bail!("Truncated chunk length at {}", i);
+            }
+            let chunk_len = u32::from_le_bytes(data[offset..offset + 4].try_into()?) as usize;
             offset += 4;
-            if offset + chunk_len > data.len() { anyhow::bail!("Truncated chunk data at {}", i); }
+            if offset + chunk_len > data.len() {
+                anyhow::bail!("Truncated chunk data at {}", i);
+            }
             if i == target as usize {
-                return Ok(data[offset..offset+chunk_len].to_vec());
+                return Ok(data[offset..offset + chunk_len].to_vec());
             }
             offset += chunk_len;
         }
@@ -1214,25 +1351,44 @@ async fn serve_chunk(Path((id, idx)): Path<(String, u64)>, State(state): State<A
     if let Some(ref data) = drop.ciphertext {
         match extract_from_slice(data, idx) {
             Ok(bytes) => {
+                eprintln!(
+                    " {} /api/chunk/{}/{} -> {} bytes (in-memory) from {}",
+                    console::style("→").dim(),
+                    id,
+                    idx,
+                    bytes.len(),
+                    resolve_client_ip(&addr, &headers)
+                );
                 return (
                     StatusCode::OK,
                     [(header::CONTENT_TYPE, "application/octet-stream")],
                     bytes,
-                ).into_response();
+                )
+                    .into_response();
             }
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to extract chunk: {}", e)).into_response(),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Failed to extract chunk: {}", e),
+                )
+                    .into_response();
+            }
         }
     }
 
     if let Some(ref path) = drop.encrypted_path {
-        use tokio::io::{AsyncReadExt, AsyncSeekExt};
         use std::io::SeekFrom;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
         match tokio::fs::File::open(path).await {
             Ok(mut f) => {
                 // Read header first
                 let mut hdr = vec![0u8; HEADER_SIZE];
                 if let Err(e) = f.read_exact(&mut hdr).await {
-                    eprintln!(" {} Failed to read header: {}", console::style("⚠").yellow(), e);
+                    eprintln!(
+                        " {} Failed to read header: {}",
+                        console::style("⚠").yellow(),
+                        e
+                    );
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
 
@@ -1243,31 +1399,56 @@ async fn serve_chunk(Path((id, idx)): Path<(String, u64)>, State(state): State<A
                     match f.read_exact(&mut len_buf).await {
                         Ok(_) => {}
                         Err(e) => {
-                            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Truncated or read error: {}", e)).into_response();
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Truncated or read error: {}", e),
+                            )
+                                .into_response();
                         }
                     }
                     let chunk_len = u32::from_le_bytes(len_buf) as usize;
                     if index == idx {
                         let mut buf = vec![0u8; chunk_len];
                         if let Err(e) = f.read_exact(&mut buf).await {
-                            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to read chunk: {}", e)).into_response();
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Failed to read chunk: {}", e),
+                            )
+                                .into_response();
                         }
+                        eprintln!(
+                            " {} /api/chunk/{}/{} -> {} bytes (file) from {}",
+                            console::style("→").dim(),
+                            id,
+                            idx,
+                            buf.len(),
+                            resolve_client_ip(&addr, &headers)
+                        );
                         return (
                             StatusCode::OK,
                             [(header::CONTENT_TYPE, "application/octet-stream")],
                             buf,
-                        ).into_response();
+                        )
+                            .into_response();
                     } else {
                         // Seek forward by chunk_len bytes
                         if let Err(e) = f.seek(SeekFrom::Current(chunk_len as i64)).await {
-                            return (StatusCode::INTERNAL_SERVER_ERROR, format!("Seek failed: {}", e)).into_response();
+                            return (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Seek failed: {}", e),
+                            )
+                                .into_response();
                         }
                     }
                     index += 1;
                 }
             }
             Err(e) => {
-                eprintln!(" {} Failed to open encrypted file: {}", console::style("⚠").yellow(), e);
+                eprintln!(
+                    " {} Failed to open encrypted file: {}",
+                    console::style("⚠").yellow(),
+                    e
+                );
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         }
@@ -1280,12 +1461,22 @@ async fn serve_web_asset(Path(path): Path<String>) -> Response {
     match WebAssets::get(&path) {
         Some(content) => {
             let mime = mime_guess::from_path(&path).first_or_octet_stream();
-            (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.to_vec()).into_response()
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime.as_ref())],
+                content.data.to_vec(),
+            )
+                .into_response()
         }
         None => match StaticAssets::get(&path) {
             Some(content) => {
                 let mime = mime_guess::from_path(&path).first_or_octet_stream();
-                (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.to_vec()).into_response()
+                (
+                    StatusCode::OK,
+                    [(header::CONTENT_TYPE, mime.as_ref())],
+                    content.data.to_vec(),
+                )
+                    .into_response()
             }
             None => StatusCode::NOT_FOUND.into_response(),
         },
@@ -1301,8 +1492,18 @@ fn serve_embedded<T: rust_embed::Embed>(path: &str) -> Response {
     match T::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
-            (StatusCode::OK, [(header::CONTENT_TYPE, mime.as_ref())], content.data.to_vec()).into_response()
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime.as_ref())],
+                content.data.to_vec(),
+            )
+                .into_response()
         }
         None => StatusCode::NOT_FOUND.into_response(),
     }
+}
+
+// Serve the module worker at the site root (/download-worker.js)
+async fn serve_root_worker() -> Response {
+    serve_embedded::<WebAssets>("download-worker.js")
 }

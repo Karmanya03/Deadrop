@@ -1,8 +1,8 @@
 #![allow(dead_code, unused_imports)]
 
-use clap::{Parser, Subcommand, Args};
-use std::path::PathBuf;
+use clap::{Args, Parser, Subcommand};
 use deadrop::{archive, config, server, tor, tunnel};
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -106,7 +106,17 @@ fn preprocess_args() -> Vec<String> {
     }
 
     let first = &args[1];
-    let known = ["send", "s", "receive", "r", "help", "--help", "-h", "--version", "-V"];
+    let known = [
+        "send",
+        "s",
+        "receive",
+        "r",
+        "help",
+        "--help",
+        "-h",
+        "--version",
+        "-V",
+    ];
     if !known.contains(&first.as_str()) {
         let mut new_args = vec![args[0].clone(), "send".to_string()];
         new_args.extend_from_slice(&args[1..]);
@@ -171,17 +181,17 @@ async fn main() -> anyhow::Result<()> {
                 );
 
                 vec![tmp_path]
-} else {
-    let mut extended: Vec<PathBuf> = Vec::new();
-    for p in &args.paths {
-        let ep = extend_path(p.clone());
-        if !ep.exists() {
-            anyhow::bail!("Path not found: {}", p.display());
-        }
-        extended.push(ep);
-    }
-    extended
-};
+            } else {
+                let mut extended: Vec<PathBuf> = Vec::new();
+                for p in &args.paths {
+                    let ep = extend_path(p.clone());
+                    if !ep.exists() {
+                        anyhow::bail!("Path not found: {}", p.display());
+                    }
+                    extended.push(ep);
+                }
+                extended
+            };
             // ── Handle multi-file: bundle into tar.gz ──
             let final_path = if resolved_paths.len() > 1 {
                 let tmp_dir = std::env::temp_dir().join("deadrop-bundle");
@@ -253,7 +263,8 @@ async fn main() -> anyhow::Result<()> {
                 tunnel::try_start_tunnel(recv_config.port).await
             };
 
-            server::start_receive(recv_config, tor_service.as_ref(), tunnel_service.as_ref()).await?;
+            server::start_receive(recv_config, tor_service.as_ref(), tunnel_service.as_ref())
+                .await?;
         }
     }
     Ok(())
@@ -270,9 +281,7 @@ fn extend_path(path: PathBuf) -> PathBuf {
         let absolute = if path.is_absolute() {
             path.clone()
         } else {
-            std::env::current_dir()
-                .unwrap_or_default()
-                .join(&path)
+            std::env::current_dir().unwrap_or_default().join(&path)
         };
         PathBuf::from(format!(r"\\?\{}", absolute.display()))
     }

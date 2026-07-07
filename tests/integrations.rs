@@ -6,12 +6,9 @@ fn test_encrypt_decrypt_roundtrip() {
     let key = deadrop::crypto::EncryptionKey::generate();
 
     let mut reader = Cursor::new(original);
-    let ciphertext = deadrop::crypto::encrypt_file_streaming(
-        &mut reader,
-        &key,
-        original.len() as u64,
-        |_| {},
-    ).unwrap();
+    let ciphertext =
+        deadrop::crypto::encrypt_file_streaming(&mut reader, &key, original.len() as u64, |_| {})
+            .unwrap();
 
     // Verify ciphertext is different from plaintext
     assert_ne!(&ciphertext[40..], original.as_slice());
@@ -46,6 +43,7 @@ fn test_config_duration_parsing() {
         "0.0.0.0".to_string(),
         false,
         Vec::new(),
-    ).unwrap();
+    )
+    .unwrap();
     assert_eq!(config.expiry_duration, chrono::Duration::minutes(30));
 }

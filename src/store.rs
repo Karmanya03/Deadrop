@@ -1,16 +1,16 @@
 use dashmap::DashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tokio::time::{Duration, interval};
 
 pub struct Drop {
     pub id: String,
-    pub encrypted_path: Option<PathBuf>,   // Some = disk-backed, None = in-memory
-    pub ciphertext: Option<Vec<u8>>,       // Some = in-memory, None = disk-backed
-    pub encrypted_size: u64,               // Total size of encrypted data
-    pub total_chunks: u64,                 // Number of encrypted chunks (for streaming/resume)
+    pub encrypted_path: Option<PathBuf>, // Some = disk-backed, None = in-memory
+    pub ciphertext: Option<Vec<u8>>,     // Some = in-memory, None = disk-backed
+    pub encrypted_size: u64,             // Total size of encrypted data
+    pub total_chunks: u64,               // Number of encrypted chunks (for streaming/resume)
     pub recipient_envelopes: Vec<RecipientEnvelope>, // per-recipient CEK envelopes (base64)
     pub filename: String,
     pub mime_type: String,
@@ -20,7 +20,7 @@ pub struct Drop {
     pub max_downloads: u32,
     pub download_count: AtomicU32,
     pub has_password: bool,
-    pub pinned_ip: Mutex<Option<String>>,  // IP pinning: first downloader gets locked
+    pub pinned_ip: Mutex<Option<String>>, // IP pinning: first downloader gets locked
 }
 
 #[derive(Clone)]
@@ -125,9 +125,7 @@ impl BlobStore {
                     (on_expire)();
                 }
                 // Also clean burned entries older than 1 hour (no need to keep forever)
-                burned.retain(|_, burned_at| {
-                    now.signed_duration_since(*burned_at).num_hours() < 1
-                });
+                burned.retain(|_, burned_at| now.signed_duration_since(*burned_at).num_hours() < 1);
             }
         });
     }

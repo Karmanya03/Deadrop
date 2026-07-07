@@ -21,53 +21,13 @@
   <img src="https://img.shields.io/badge/server_knows-nothing-ff4444?style=flat-square" alt="zero knowledge" />
   <img src="https://img.shields.io/badge/after_download-self_destructs-ff4444?style=flat-square" alt="self destruct" />
   <img src="https://img.shields.io/badge/dependencies-just_the_binary-blueviolet?style=flat-square" alt="single binary" />
-  <img src="https://img.shields.io/badge/tor-hidden_service-blueviolet?style=flat-square" alt="tor" />
-  <img src="https://img.shields.io/badge/tunnel-cloudflare-blueviolet?style=flat-square" alt="cloudflare" />
 </p>
-
----
-
-
-
 
 ## What is this?
 
 Remember in spy movies when someone leaves a briefcase under a park bench, and someone else picks it up later? That's a dead drop.
 
 This is that, but for files. Except the briefcase is encrypted with military-grade cryptography, the park bench self-destructs after pickup, nobody - not even the bench - knows what's inside, the bench can hide on the dark web, AND it now has a Cloudflare-powered tunnel so anyone on the internet can pick it up without you port-forwarding like it's 2003.
-
-### How a drop works
-
-```
-  YOU                           YOUR MACHINE                         FRIEND
-   |                                 |                                  |
-   |   ded secret-plans.pdf          |                                  |
-   |-------------------------------->|                                  |
-   |                                 |                                  |
-   |   1. Encrypt file (Rust)        |                                  |
-   |   2. Key goes in URL #fragment  |                                  |
-   |   3. Start server (Axum)        |                                  |
-   |   4. Cloudflare tunnel opens    |                                  |
-   |                                 |                                  |
-   |   Share link (Signal/QR/etc)    |                                  |
-   |------------------------------------------------------>            |
-   |                                 |                                  |
-   |                                 |  <--- Opens link in browser -----|
-   |                                 |                                  |
-   |                                 |  --- Try P2P WebSocket -------->|
-   |                                 |  --- Fallback: HTTP download -->|
-   |                                 |                                  |
-   |                                 |       Browser extracts #key      |
-   |                                 |       WASM decrypts locally      |
-   |                                 |       File saves to device       |
-   |                                 |                                  |
-   |   BOOM. Self-destruct.          |                                  |
-   |   Drop burned. Server dies.     |                                  |
-   |   Tunnel closed.                |                                  |
-   |                                 |                                  |
-   V                                 V                                  V
-   What file?                    What server?                    Got it, thanks.
-```
 
 ## Features
 
@@ -299,170 +259,123 @@ ded receive --tor -o ~/secrets/
 
 Think of it like a relay race, except the baton is encrypted and the track self-destructs.
 
-```
-  SENDER                         SERVER (your PC)                     RECEIVER
-    |                                  |                                  |
-    |  1. Generate 256-bit key         |                                  |
-    |     (or derive from password)    |                                  |
-    |  2. Encrypt with XChaCha20       |                                  |
-    |  3. Store ciphertext on disk --->|                                  |
-    |  4. Key goes into URL #fragment  |                                  |
-    |     (or salt, if --pw)           |                                  |
-    |  5. Cloudflare tunnel opens ---->| (public URL, no port forwarding) |
-    |                                  |                                  |
-    |  6. Share link  -------------------------------------------->       |
-    |     (Signal, QR, carrier pigeon) |                                  |
-    |                                  |                                  |
-    |                                  | <--- 7. Opens link --------------|
-    |                                  |                                  |
-    |                                  | --- 8a. WebSocket P2P -------->  |
-    |                                  |     (fast, streamed)             |
-    |                                  |                                  |
-    |                                  | --- 8b. HTTP fallback -------->  |
-    |                                  |     (if P2P fails, auto-switch)  |
-    |                                  |                                  |
-    |                                  |  9. Browser extracts #key        |
-    |                                  |     (or prompts for password)    |
-    |                                  | 10. WASM decrypts in browser     |
-    |                                  | 11. File saves to device         |
-    |                                  |                                  |
-    |  SELF-DESTRUCT SEQUENCE:         |                                  |
-    |  - Drop marked as burned         |                                  |
-    |  - Ciphertext zero-wiped         |                                  |
-    |  - Keys zeroized from RAM        |                                  |
-    |  - Tunnel closed                 |                                  |
-    |  - Server shuts down             |                                  |
-    V                                  V                                  V
+```mermaid
+sequenceDiagram
+    participant Sender
+    participant Server as Server / Your PC
+    participant Receiver
+    participant Browser
+
+    Sender->>Server: Generate 256-bit key
+    Sender->>Server: Encrypt with XChaCha20-Poly1305
+    Server-->>Server: Store ciphertext on disk
+    Server-->>Sender: Put key or salt in URL fragment
+    Server-->>Receiver: Share link via Signal, QR, or other channel
+    Receiver->>Browser: Open link
+    Browser->>Server: Request download
+    Browser->>Browser: Try WebSocket P2P first
+    Browser->>Browser: Fall back to HTTP if needed
+    Browser->>Browser: Extract fragment and decrypt locally
+    Browser->>Receiver: Save file to device
+    Server-->>Server: Burn drop and shut down
 ```
 
 ### Password flow (zero-knowledge)
 
 The server is so clueless about your password, it makes Jon Snow look omniscient.
 
-```
-  SENDER                         SERVER                               RECEIVER
-    |                                  |                                  |
-    |  ded file --pw "hunter2"         |                                  |
-    |                                  |                                  |
-    |  1. Argon2id(password, salt)     |                                  |
-    |     --> 256-bit key              |                                  |
-    |  2. Encrypt file with key        |                                  |
-    |  3. URL = .../d/id#pw:<salt>     |                                  |
-    |     (salt in URL, NOT the key)   |                                  |
-    |                                  |                                  |
-    |  4. Share link  -------------------------------------------->       |
-    |  5. Share password  ------ (different channel: call, SMS) -->       |
-    |                                  |                                  |
-    |                                  | <--- 6. Opens link --------------|
-    |                                  | ---> 7. Serves download page --->|
-    |                                  |                                  |
-    |                                  |      8. Password prompt appears  |
-    |                                  |      9. Types password           |
-    |                                  |     10. WASM: Argon2id(pw,salt)  |
-    |                                  |         --> derives same key     |
-    |                                  |                                  |
-    |                                  | <--11. Fetch encrypted blob -----|
-    |                                  | -->12. Return ciphertext ------->|
-    |                                  |                                  |
-    |                                  |     13. WASM decrypts locally    |
-    |                                  |     14. File downloads           |
-    |                                  |                                  |
-    |  Server never saw: password, key, or file contents. It died happy. |
-    V                                  V                                  V
+```mermaid
+sequenceDiagram
+    participant Sender
+    participant Server
+    participant Receiver
+    participant Browser
+
+    Sender->>Server: Derive key with Argon2id(password, salt)
+    Sender->>Server: Encrypt file with derived key
+    Sender->>Server: Build URL /d/id#pw:<salt>
+    Sender->>Receiver: Share link
+    Sender->>Receiver: Share password separately
+    Receiver->>Browser: Open link
+    Browser->>Server: Request download page and ciphertext
+    Browser->>Browser: Prompt for password
+    Browser->>Browser: Derive the same key with WASM Argon2id
+    Browser->>Browser: Decrypt locally
+    Browser->>Receiver: Save the file
+    Server-->>Server: Never learns password, key, or contents
 ```
 
 ### Receive flow
 
-```
-  PC (you)                       SERVER (your PC)                     PHONE
-    |                                  |                                  |
-    |  ded receive                     |                                  |
-    |  1. Generate key  -------------->|                                  |
-    |  2. Key goes into QR code        |                                  |
-    |                                  |                                  |
-    |                                  | <--- 3. Scan QR, open page -----|
-    |                                  |                                  |
-    |                                  |      4. Pick file on phone       |
-    |                                  |      5. WASM encrypts in-browser |
-    |                                  |                                  |
-    |                                  | <--- 6. Upload ciphertext ------|
-    |                                  |                                  |
-    |  7. Server decrypts  <-----------|                                  |
-    |  8. Saves to disk                |                                  |
-    |                                  |                                  |
-    |  Done. Server self-destructs. Phone can leave now.                  |
-    V                                  V                                  V
+```mermaid
+sequenceDiagram
+    participant PC as Your PC
+    participant Server as Deadrop server
+    participant Phone
+
+    PC->>Server: Start receive mode
+    Server->>PC: Generate key and QR code
+    Phone->>Server: Scan QR and open page
+    Phone->>Phone: Pick a file
+    Phone->>Phone: Encrypt in browser with WASM
+    Phone->>Server: Upload ciphertext
+    Server->>Server: Decrypt and save to disk
+    Server-->>Server: Self-destruct after success
 ```
 
 ### Cloudflare tunnel flow
 
 No more "open port 8080 on your router" nonsense. No more begging your ISP for a static IP.
 
-```
-  YOUR MACHINE                   CLOUDFLARE                          RECEIVER
-    |                                  |                                  |
-    |  Server starts on localhost      |                                  |
-    |                                  |                                  |
-    |  1. cloudflared creates tunnel ->|                                  |
-    |     (outbound connection only)   |                                  |
-    |                                  |                                  |
-    |  2. Gets public URL:             |                                  |
-    |     https://random.trycloudflare.com                                |
-    |                                  |                                  |
-    |                                  | <--- 3. Receiver opens URL ------|
-    |                                  | ---> 4. Routes to your machine ->|
-    |                                  |                                  |
-    |  5. File transfer happens        |                                  |
-    |     (P2P WebSocket or HTTP)      |                                  |
-    |                                  |                                  |
-    |  6. Drop self-destructs          |                                  |
-    |  7. Tunnel closes                |                                  |
-    V                                  V                                  V
+```mermaid
+sequenceDiagram
+    participant Machine as Your Machine
+    participant Cloudflare
+    participant Receiver
+
+    Machine->>Cloudflare: cloudflared opens an outbound tunnel
+    Cloudflare-->>Machine: Return a public trycloudflare.com URL
+    Receiver->>Cloudflare: Open the URL
+    Cloudflare->>Machine: Route traffic to localhost
+    Machine->>Receiver: Transfer encrypted bytes via P2P or HTTP
+    Machine-->>Machine: Burn the drop
+    Machine-->>Cloudflare: Close the tunnel
 ```
 
 Cloudflare only sees encrypted bytes. The `#key` fragment never leaves the browser. It's turtles (encryption) all the way down.
 
 ### Tor flow
 
-For when you want to share files and also cosplay as a ghost:
+```mermaid
+sequenceDiagram
+    participant PC as Your PC
+    participant Server as Deadrop server
+    participant Phone
 
-```
-  SENDER                         TOR NETWORK (3 relays)              RECEIVER
-    |                                  |                                  |
-    |  ded --tor secret.pdf            |                                  |
-    |                                  |                                  |
-    |  1. Spins up .onion service  --->|                                  |
-    |     (takes ~30-60 seconds)       |                                  |
-    |                                  |                                  |
-    |  2. Share .onion URL  -----------|------------------------------>   |
-    |                                  |                                  |
-    |                                  | <--- 3. Opens in Tor Browser ---|
-    |                                  | ---> 4. Encrypted bytes ------->|
-    |                                  |                                  |
-    |  No IP. No trace. No idea.       |      5. WASM decrypts locally   |
-    V                                  V                                  V
+    PC->>Server: Start receive mode
+    Server->>PC: Generate key and QR code
+    Phone->>Server: Scan QR and open page
+    Phone->>Phone: Pick a file
+    Phone->>Phone: Encrypt in browser with WASM
+    Phone->>Server: Upload ciphertext
+    Server->>Server: Decrypt and save to disk
+    Server-->>Server: Self-destruct after success
 ```
 
 ### The download fallback system
 
 Because the internet is held together with duct tape and prayers:
 
-```
-  Browser opens download link
-    |
-    +--> Try WebSocket P2P (fast, streamed, chunked)
-    |      |
-    |      +--> SUCCESS --> Decrypt with WASM --> Save file
-    |      |
-    |      +--> FAIL (timeout/error/blocked)
-    |             |
-    |             +--> Fallback to HTTP download (reliable, standard fetch)
-    |                    |
-    |                    +--> SUCCESS --> Decrypt with WASM --> Save file
-    |                    |
-    |                    +--> FAIL --> Show error message
-    |
-    +--> Either way, server self-destructs after successful download
+```mermaid
+flowchart TD
+    start[Browser opens download link] --> p2p{Try WebSocket P2P}
+    p2p -->|Success| p2p_ok[Decrypt with WASM]
+    p2p -->|Fail| http{Fallback to HTTP download}
+    http -->|Success| http_ok[Decrypt with WASM]
+    http -->|Fail| error[Show error message]
+    p2p_ok --> save[Save file]
+    http_ok --> save
+    save --> burn[Server self-destructs]
 ```
 
 The switch from P2P to HTTP is automatic and invisible. The receiver doesn't know or care. It just works, like magic, except it's actually just good error handling.

@@ -1,6 +1,11 @@
     // ─── SECURITY: Extract key and nuke from URL/history immediately ───
-    const pathParts = window.location.pathname.split('/');
-    const dropId = pathParts[pathParts.length - 1];
+    const dropIdMatch = window.location.pathname.match(/\/d\/([^/]+)\/?$/);
+    if (!dropIdMatch) {
+        statusEl.className = 'error';
+        statusEl.textContent = 'Invalid download link. Open the /d/<id> route from a shared drop URL.';
+        throw new Error('Invalid drop route');
+    }
+    const dropId = decodeURIComponent(dropIdMatch[1]);
 
     let key = null;
     if (window.location.hash && window.location.hash.length > 1) {
@@ -21,7 +26,8 @@
 
     // ─── Validate key presence ───
     if (!key) {
-        statusEl.innerHTML = '<span class="error">No decryption key found in URL</span>';
+        statusEl.className = 'error';
+        statusEl.textContent = 'No decryption key found in URL';
         throw new Error('No key');
     }
 
@@ -32,14 +38,16 @@
 
             // Handle burned drops (HTTP 410 Gone)
             if (res.status === 410) {
-                statusEl.innerHTML = '<span class="success">🔥 This drop was already downloaded and destroyed.</span>';
+                statusEl.className = 'success';
+                statusEl.textContent = '🔥 This drop was already downloaded and destroyed.';
                 shieldEl.style.display = 'block';
                 key = null;
                 return;
             }
 
             if (!res.ok) {
-                statusEl.innerHTML = '<span class="error">Drop not found — it may have expired or self-destructed</span>';
+                statusEl.className = 'error';
+                statusEl.textContent = 'Drop not found — it may have expired or self-destructed';
                 return;
             }
 
@@ -59,7 +67,8 @@
                 // ─── SECURITY: Auto-destruct the page when the drop expires ───
                 setTimeout(() => {
                     key = null;
-                    statusEl.innerHTML = '<span class="error">⏰ This drop has expired and self-destructed.</span>';
+                    statusEl.className = 'error';
+                    statusEl.textContent = '⏰ This drop has expired and self-destructed.';
                     btnEl.style.display = 'none';
                     metaCard.style.display = 'none';
                     progressCont.style.display = 'none';
@@ -73,7 +82,8 @@
             btnEl.style.display = 'inline-block';
             statusEl.textContent = 'Ready to download';
         } catch (e) {
-            statusEl.innerHTML = `<span class="error">Connection failed: ${e.message}</span>`;
+            statusEl.className = 'error';
+            statusEl.textContent = 'Connection failed: ' + (e && e.message ? e.message : String(e));
         }
     }
 
@@ -101,11 +111,9 @@
         const a = document.createElement('a');
         a.href = url;
         a.download = filename;
-        document.body.appendChild(a);
         a.click();
         setTimeout(() => {
             URL.revokeObjectURL(url);
-            document.body.removeChild(a);
         }, 1000);
         onSuccess();
     }
@@ -113,7 +121,8 @@
     function onSuccess() {
         progressFill.style.width = '100%';
         progressFill.style.background = '#00ff88';
-        statusEl.innerHTML = '<span class="success">✅ Decrypted and saved! This drop has self-destructed on the server.</span>';
+        statusEl.className = 'success';
+        statusEl.textContent = '✅ Decrypted and saved! This drop has self-destructed on the server.';
         btnEl.style.display = 'none';
         progressText.textContent = 'Complete';
 
@@ -144,7 +153,8 @@
                         worker.terminate();
                         break;
                     case 'error':
-                        statusEl.innerHTML = `<span class="error">${msg.message}</span>`;
+                        statusEl.className = 'error';
+                        statusEl.textContent = msg.message || 'Download failed';
                         progressFill.style.background = '#ff4444';
                         btnEl.textContent = 'Retry';
                         btnEl.disabled = false;
@@ -154,7 +164,8 @@
             };
 
             worker.onerror = (e) => {
-                statusEl.innerHTML = `<span class="error">Worker error: ${e.message}</span>`;
+                statusEl.className = 'error';
+                statusEl.textContent = 'Worker error: ' + (e && e.message ? e.message : String(e));
                 btnEl.textContent = 'Retry';
                 btnEl.disabled = false;
             };
@@ -179,7 +190,8 @@
                 progressFill.style.width = '90%';
                 saveFile(plaintext.buffer, fileMeta.filename, fileMeta.mime);
             } catch (e) {
-                statusEl.innerHTML = `<span class="error">${e.message} ${e}</span>`;
+                statusEl.className = 'error';
+                statusEl.textContent = String((e && e.message) ? e.message : e);
                 btnEl.textContent = 'Retry';
                 btnEl.disabled = false;
             }

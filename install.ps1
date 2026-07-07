@@ -38,6 +38,7 @@ function Invoke-DeadropInstall {
     Write-Host "  Install to:    $installDir" -ForegroundColor White
     Write-Host ""
     Write-Host "  Downloading $asset..." -ForegroundColor Yellow
+    $VerboseEnabled = ($env:DEADROP_INSTALL_VERBOSE -eq '1' -or $env:DEADROP_INSTALL_VERBOSE -eq 'true')
 
     if (!(Test-Path $installDir)) {
         New-Item -ItemType Directory -Path $installDir -Force | Out-Null
@@ -56,32 +57,66 @@ function Invoke-DeadropInstall {
     $lastErr = $null
 
     # Retry a few times for transient TLS/proxy/CDN resets.
-    for ($attempt = 1; $attempt -le 3; $attempt++) {
+    for ($attempt = 1; $attempt -le 4; $attempt++) {
         try {
-            Invoke-WebRequest @iwrParams
+            if ($VerboseEnabled) { Write-Host "  Attempt ${attempt}: Invoke-WebRequest $downloadUrl" -ForegroundColor Gray }
+            Invoke-WebRequest @iwrParams -Headers @{ 'User-Agent' = 'deadrop-installer' } -TimeoutSec 30
             $downloadOk = $true
             break
         } catch {
-            $lastErr = $_.Exception.Message
-            Start-Sleep -Seconds (1 * $attempt)
+            $lastErr = $_.Exception.ToString()
+            if ($VerboseEnabled) { Write-Host "  Invoke-WebRequest failed: $lastErr" -ForegroundColor Yellow }
+            Start-Sleep -Seconds (2 * $attempt)
         }
     }
 
     # Fallback to curl.exe if IWR keeps failing.
     if (-not $downloadOk -and (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
+        $curlLog = "$env:TEMP\deadrop-curl-$(Get-Random).log"
         try {
-            & curl.exe -fL --retry 3 --retry-delay 1 --connect-timeout 20 -o $tmpPath $downloadUrl | Out-Null
-            if ($LASTEXITCODE -eq 0) {
+            if ($VerboseEnabled) { Write-Host "  Falling back to curl.exe (logging to $curlLog)" -ForegroundColor Gray }
+            & curl.exe -fL --retry 3 --retry-delay 1 --connect-timeout 20 -o $tmpPath $downloadUrl 2> $curlLog
+            if ($LASTEXITCODE -eq 0 -and (Test-Path $tmpPath)) {
                 $downloadOk = $true
+            } else {
+                $lastErr = Get-Content -Raw -ErrorAction SilentlyContinue $curlLog
             }
         } catch {
-            $lastErr = $_.Exception.Message
+            $lastErr = $_.Exception.ToString()
+        }
+    }
+
+    # Final fallback: use GitHub API to resolve asset URL (helps with CDN/proxy issues)
+    if (-not $downloadOk) {
+        try {
+            $apiUrl = "https://api.github.com/repos/$repo/releases/latest"
+            if ($VerboseEnabled) { Write-Host "  Querying GitHub API for release assets: $apiUrl" -ForegroundColor Gray }
+            $release = Invoke-RestMethod -Uri $apiUrl -Headers @{ 'User-Agent' = 'deadrop-installer' } -ErrorAction Stop
+            $assetObj = $release.assets | Where-Object { $_.name -eq $asset }
+            if ($null -ne $assetObj -and $assetObj.browser_download_url) {
+                $apiDownload = $assetObj.browser_download_url
+                if ($VerboseEnabled) { Write-Host "  Downloading via browser_download_url: $apiDownload" -ForegroundColor Gray }
+                try {
+                    Invoke-WebRequest -Uri $apiDownload -OutFile $tmpPath -Headers @{ 'User-Agent' = 'deadrop-installer' } -TimeoutSec 30
+                    if (Test-Path $tmpPath -and (Get-Item $tmpPath).Length -gt 0) { $downloadOk = $true }
+                } catch {
+                    $lastErr = $_.Exception.ToString()
+                }
+            } else {
+                if ($VerboseEnabled) { Write-Host "  Asset not found in GitHub API response." -ForegroundColor Yellow }
+            }
+        } catch {
+            if ($VerboseEnabled) { Write-Host "  GitHub API fallback failed: $($_.Exception.Message)" -ForegroundColor Yellow }
+            $lastErr = $_.Exception.ToString()
         }
     }
 
     if (-not $downloadOk) {
         if (Test-Path $tmpPath) { Remove-Item -Force $tmpPath -ErrorAction SilentlyContinue }
-        throw "Download failed. Release exists, but network/TLS/proxy interrupted the transfer. Try again.\nRelease: https://github.com/$repo/releases/latest\nError: $lastErr"
+        $msg = "Download failed. Release exists, but network/TLS/proxy interrupted the transfer. Try again.`nRelease: https://github.com/$repo/releases/latest`n"
+        if ($lastErr) { $msg += "Last error: $lastErr`n" }
+        $msg += "If this keeps failing, set environment variable DEADROP_INSTALL_VERBOSE=1 and re-run the installer to collect detailed logs."
+        throw $msg
     }
 
     if (!(Test-Path $tmpPath) -or (Get-Item $tmpPath).Length -eq 0) {

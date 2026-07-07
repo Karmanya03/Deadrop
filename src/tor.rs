@@ -23,10 +23,7 @@ impl Drop for TorHiddenService {
     fn drop(&mut self) {
         if let Some(ref mut child) = self.child {
             let _ = child.start_kill();
-            eprintln!(
-                " {} Tor hidden service stopped",
-                console::style("🧅").dim()
-            );
+            eprintln!(" {} Tor hidden service stopped", console::style("🧅").dim());
         }
     }
 }

@@ -1,8 +1,8 @@
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
+use indicatif::ProgressBar;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use indicatif::ProgressBar;
 
 /// Maximum length for the root folder name inside the archive.
 /// tar's ustar header supports 100 bytes for the full path, so we keep
@@ -17,14 +17,13 @@ fn truncate_archive_prefix(name: &str) -> String {
     }
     // Truncate and trim trailing whitespace/hyphens/underscores for cleanliness
     let truncated = &name[..MAX_ARCHIVE_PREFIX];
-    truncated.trim_end_matches(|c: char| c == ' ' || c == '-' || c == '_').to_string()
+    truncated
+        .trim_end_matches(|c: char| c == ' ' || c == '-' || c == '_')
+        .to_string()
 }
 
 /// Archives a folder into an in-memory .tar.gz and returns (bytes, display_name)
-pub fn compress_folder(
-    path: &Path,
-    progress: &ProgressBar,
-) -> anyhow::Result<(Vec<u8>, String)> {
+pub fn compress_folder(path: &Path, progress: &ProgressBar) -> anyhow::Result<(Vec<u8>, String)> {
     if !path.is_dir() {
         return Err(anyhow::anyhow!("{} is not a directory", path.display()));
     }

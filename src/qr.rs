@@ -1,5 +1,5 @@
-use qrcode::{QrCode, render::unicode};
 use console::style;
+use qrcode::{QrCode, render::unicode};
 
 pub fn print_qr(url: &str) {
     let code = match QrCode::new(url.as_bytes()) {

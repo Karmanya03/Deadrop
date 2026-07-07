@@ -15,8 +15,12 @@ self.onmessage = async (ev) => {
             const wasm = wasmImport;
 
             // Fetch header metadata
-            const resp = await fetch(`/api/chunks/${encodeURIComponent(dropId)}`);
-            if (!resp.ok) throw new Error('Failed to fetch chunk metadata');
+            self.postMessage({ type: 'debug', message: `fetch /api/chunks/${dropId}` });
+            const resp = await fetchWithTimeout(`/api/chunks/${encodeURIComponent(dropId)}`, 8000);
+            if (!resp.ok) {
+                const txt = await resp.text().catch(() => '');
+                throw new Error(`Failed to fetch chunk metadata: ${resp.status} ${txt}`);
+            }
             const meta = await resp.json();
 
             // Decode nonce
@@ -33,11 +37,16 @@ self.onmessage = async (ev) => {
             let start_idx = (last !== null) ? (last + 1) : 0;
 
             for (let idx = start_idx; idx < total; idx++) {
-                const chunkResp = await fetch(`/api/chunk/${encodeURIComponent(dropId)}/${idx}`);
-                if (!chunkResp.ok) throw new Error(`Failed to fetch chunk ${idx}`);
+                self.postMessage({ type: 'debug', message: `fetch /api/chunk/${dropId}/${idx}` });
+                const chunkResp = await fetchWithTimeout(`/api/chunk/${encodeURIComponent(dropId)}/${idx}`, 10000);
+                if (!chunkResp.ok) {
+                    const txt = await chunkResp.text().catch(() => '');
+                    throw new Error(`Failed to fetch chunk ${idx}: ${chunkResp.status} ${txt}`);
+                }
                 const encrypted = new Uint8Array(await chunkResp.arrayBuffer());
 
                 // Decrypt chunk using wasm
+                // pass chunk index as Number (wasm-bindgen expects a JS number for u64)
                 const decrypted = wasm.decrypt_chunk(encrypted, key, nonce_bytes, BigInt(idx));
 
                 // Send decrypted chunk as transferable
@@ -53,6 +62,12 @@ self.onmessage = async (ev) => {
         }
     }
 };
+
+function fetchWithTimeout(url, timeoutMs) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    return fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timeout));
+}
 
 // IndexedDB helpers for resume
 function openResumeDB() {

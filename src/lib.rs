@@ -7,5 +7,5 @@ pub mod progress;
 pub mod qr;
 pub mod server;
 pub mod store;
-pub mod tor; 
+pub mod tor;
 pub mod tunnel;

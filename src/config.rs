@@ -96,6 +96,12 @@ impl ReceiveConfig {
         no_qr: bool,
     ) -> anyhow::Result<Self> {
         let expiry_duration = parse_duration(&expire)?;
-        Ok(Self { output_dir: output, port, expiry_duration, bind, no_qr })
+        Ok(Self {
+            output_dir: output,
+            port,
+            expiry_duration,
+            bind,
+            no_qr,
+        })
     }
 }

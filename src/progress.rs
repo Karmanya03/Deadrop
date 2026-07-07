@@ -81,14 +81,47 @@ pub fn print_banner(
         format!("{}", max_downloads)
     };
 
-   eprintln!();
-    eprintln!("{}", style(r#"     ██████╗ ███████╗ █████╗ ██████╗ ██████╗  ██████╗ ██████╗ "#).bold().green());
-    eprintln!("{}", style(r#"     ██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔═══██╗██╔══██╗"#).bold().green());
-    eprintln!("{}", style(r#"     ██║  ██║█████╗  ███████║██║  ██║██████╔╝██║   ██║██████╔╝"#).bold().green());
-    eprintln!("{}", style(r#"     ██║  ██║██╔══╝  ██╔══██║██║  ██║██╔══██╗██║   ██║██╔═══╝ "#).bold().green());
-    eprintln!("{}", style(r#"     ██████╔╝███████╗██║  ██║██████╔╝██║  ██║╚██████╔╝██║     "#).bold().green());
-    eprintln!("{}", style(r#"     ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝     "#).bold().green());
-    eprintln!("{}", style(r#"          ⚡ zero-knowledge encrypted file sharing ⚡"#).dim());
+    eprintln!();
+    eprintln!(
+        "{}",
+        style(r#"     ██████╗ ███████╗ █████╗ ██████╗ ██████╗  ██████╗ ██████╗ "#)
+            .bold()
+            .green()
+    );
+    eprintln!(
+        "{}",
+        style(r#"     ██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔══██╗██╔═══██╗██╔══██╗"#)
+            .bold()
+            .green()
+    );
+    eprintln!(
+        "{}",
+        style(r#"     ██║  ██║█████╗  ███████║██║  ██║██████╔╝██║   ██║██████╔╝"#)
+            .bold()
+            .green()
+    );
+    eprintln!(
+        "{}",
+        style(r#"     ██║  ██║██╔══╝  ██╔══██║██║  ██║██╔══██╗██║   ██║██╔═══╝ "#)
+            .bold()
+            .green()
+    );
+    eprintln!(
+        "{}",
+        style(r#"     ██████╔╝███████╗██║  ██║██████╔╝██║  ██║╚██████╔╝██║     "#)
+            .bold()
+            .green()
+    );
+    eprintln!(
+        "{}",
+        style(r#"     ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚═╝     "#)
+            .bold()
+            .green()
+    );
+    eprintln!(
+        "{}",
+        style(r#"          ⚡ zero-knowledge encrypted file sharing ⚡"#).dim()
+    );
     eprintln!();
 
     eprintln!("  {}", style("─".repeat(50)).dim());
